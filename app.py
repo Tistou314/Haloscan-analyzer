@@ -109,12 +109,21 @@ if uploaded_leads:
         st.subheader("📅 Périodes à comparer")
         st.caption("Sélectionnez les mois correspondant à votre export Haloscan")
         
+        # Calculer les valeurs par défaut
+        default_avant = [c for c in month_cols_sorted if c.startswith('2025_09')]
+        if not default_avant:
+            default_avant = month_cols_sorted[-6:-3] if len(month_cols_sorted) >= 6 else month_cols_sorted[:3]
+        
+        default_apres = [c for c in month_cols_sorted if c.startswith('2025_11') or c.startswith('2026')]
+        if not default_apres:
+            default_apres = month_cols_sorted[-3:] if len(month_cols_sorted) >= 3 else month_cols_sorted[-1:]
+        
         # Période AVANT (ancienne position)
         st.markdown("**Période AVANT** (ex: sept 2025)")
         periode_avant = st.multiselect(
             "Mois période avant",
             options=month_cols_sorted,
-            default=[c for c in month_cols_sorted if c.startswith('2025_09')] or month_cols_sorted[-6:-3] if len(month_cols_sorted) >= 6 else month_cols_sorted[:3],
+            default=default_avant,
             key="avant"
         )
         
@@ -123,7 +132,7 @@ if uploaded_leads:
         periode_apres = st.multiselect(
             "Mois période après", 
             options=month_cols_sorted,
-            default=[c for c in month_cols_sorted if c.startswith('2025_11') or c.startswith('2026')] or month_cols_sorted[-3:] if len(month_cols_sorted) >= 3 else month_cols_sorted[-1:],
+            default=default_apres,
             key="apres"
         )
     
