@@ -192,19 +192,42 @@ if uploaded_file:
             url_stats = df_f.groupby('url').agg(
                 total_kw=('diff_pos', 'count'),
                 kw_perte=('diff_pos', lambda x: (x < 0).sum()),
+                kw_gain=('diff_pos', lambda x: (x > 0).sum()),
+                diff_moyen=('diff_pos', 'mean'),
                 volume=('volume', 'sum') if 'volume' in df_f.columns else ('diff_pos', 'count'),
                 score=('priority_score', 'sum')
-            ).reset_index().sort_values('score', ascending=False)
+            ).reset_index()
+            url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
+            url_stats = url_stats.sort_values('score', ascending=False)
             
-            st.dataframe(url_stats.head(200), use_container_width=True, height=400)
+            st.info(f"**{len(url_stats):,}** URLs analysées — Affichage complet")
+            st.dataframe(url_stats, use_container_width=True, height=500)
+            
+            # Export complet
+            csv_urls = url_stats.to_csv(index=False, sep=';').encode('utf-8')
+            st.download_button("📥 Exporter TOUTES les URLs (CSV)", csv_urls, "analyse_urls_complete.csv")
+            
+            st.divider()
             
             # Détail URL
-            st.subheader("🔍 Détail")
-            url_sel = st.selectbox("URL", url_stats['url'].head(50).tolist())
+            st.subheader("🔍 Détail d'une URL")
+            url_sel = st.selectbox("Sélectionner une URL", url_stats['url'].tolist())
             if url_sel:
                 df_url = df_f[df_f['url'] == url_sel]
-                cols = [c for c in ['mot_cle', 'diff_pos', 'volume', 'derniere_pos'] if c in df_url.columns]
-                st.dataframe(df_url[cols], use_container_width=True)
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total KW", len(df_url))
+                c2.metric("En perte", len(df_url[df_url['diff_pos'] < 0]))
+                c3.metric("En gain", len(df_url[df_url['diff_pos'] > 0]))
+                if 'volume' in df_url.columns:
+                    c4.metric("Volume total", f"{int(df_url['volume'].fillna(0).sum()):,}")
+                
+                cols = [c for c in ['mot_cle', 'diff_pos', 'volume', 'derniere_pos', 'ancienne_pos', 'meilleure_pos'] if c in df_url.columns]
+                st.dataframe(df_url[cols].sort_values('diff_pos'), use_container_width=True)
+                
+                # Export détail URL
+                csv_url_detail = df_url[cols].to_csv(index=False, sep=';').encode('utf-8')
+                st.download_button(f"📥 Exporter les KW de cette URL", csv_url_detail, f"detail_url.csv")
         else:
             st.warning("Colonne 'url' non trouvée")
     
@@ -214,28 +237,184 @@ if uploaded_file:
         df_gains = df_f[df_f['diff_pos'] > 0].sort_values('priority_score', ascending=False)
         st.success(f"**{len(df_gains):,}** mots-clés en gain")
         
-        cols = [c for c in ['mot_cle', 'url', 'diff_pos', 'volume'] if c in df_gains.columns]
-        st.dataframe(df_gains[cols].head(500), use_container_width=True, height=600)
+        cols = [c for c in ['mot_cle', 'url', 'diff_pos', 'volume', 'derniere_pos', 'ancienne_pos'] if c in df_gains.columns]
+        st.dataframe(df_gains[cols], use_container_width=True, height=600)
+        
+        csv_gains = df_gains[cols].to_csv(index=False, sep=';').encode('utf-8')
+        st.download_button("📥 Exporter TOUS les gains (CSV)", csv_gains, "gains_complet.csv")
     
     # TAB 5: RAPPORT
     with tab5:
-        st.header("📝 Rapport")
-        if st.button("Générer"):
-            report = f"""# Rapport SEO — {datetime.now().strftime('%d/%m/%Y')}
-
-## Résumé
-- Total: {total:,} KW
-- Pertes: {pertes:,}
-- Gains: {gains:,}
-- Volume perdu: {vol_perdu:,}
-
-## Top 10 Pertes
-"""
-            for _, r in df_f[df_f['diff_pos'] < 0].nlargest(10, 'priority_score').iterrows():
-                report += f"- {r.get('mot_cle', 'N/A')} (vol:{int(r.get('volume', 0) or 0)}, diff:{int(r.get('diff_pos', 0) or 0)})\n"
+        st.header("📝 Rapport complet pour l'équipe édito")
+        
+        if st.button("🔄 Générer le rapport complet", type="primary"):
             
-            st.markdown(report)
-            st.download_button("📥 Télécharger", report, "rapport.md")
+            # Calculs pour le rapport
+            df_pertes_rapport = df_f[df_f['diff_pos'] < 0].sort_values('priority_score', ascending=False)
+            df_gains_rapport = df_f[df_f['diff_pos'] > 0].sort_values('priority_score', ascending=False)
+            
+            # URLs les plus impactées
+            if 'url' in df_f.columns:
+                urls_critiques = df_pertes_rapport.groupby('url').agg(
+                    nb_kw_perdus=('diff_pos', 'count'),
+                    volume_impacte=('volume', 'sum') if 'volume' in df_f.columns else ('diff_pos', 'count'),
+                    diff_moyen=('diff_pos', 'mean'),
+                    score_total=('priority_score', 'sum')
+                ).reset_index().sort_values('score_total', ascending=False)
+            
+            report = f"""# 📊 RAPPORT D'ANALYSE SEO COMPLET
+## Période : Septembre 2025 → Février 2026
+## Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}
+
+---
+
+# 1. SYNTHÈSE GLOBALE
+
+| Métrique | Valeur |
+|----------|--------|
+| **Total mots-clés analysés** | {total:,} |
+| **Mots-clés en perte** | {pertes:,} ({pertes/total*100:.1f}%) |
+| **Mots-clés en gain** | {gains:,} ({gains/total*100:.1f}%) |
+| **Mots-clés stables** | {stables:,} ({stables/total*100:.1f}%) |
+| **Volume de recherche perdu** | {vol_perdu:,} /mois |
+| **Volume de recherche gagné** | {vol_gagne:,} /mois |
+| **Bilan net volume** | {vol_gagne - vol_perdu:+,} /mois |
+
+---
+
+# 2. DIAGNOSTIC
+
+"""
+            if pertes > gains:
+                report += f"""⚠️ **SITUATION PRÉOCCUPANTE** : Le site perd plus de positions qu'il n'en gagne.
+- Ratio pertes/gains : {pertes/gains:.1f}x plus de pertes
+- Action recommandée : **Audit urgent des contenus impactés**
+
+"""
+            else:
+                report += f"""✅ **SITUATION POSITIVE** : Le site gagne plus de positions qu'il n'en perd.
+- Ratio gains/pertes : {gains/pertes:.1f}x plus de gains
+
+"""
+
+            report += f"""---
+
+# 3. TOUTES LES PAGES À TRAITER ({len(urls_critiques):,} URLs)
+
+Ces URLs sont triées par score de priorité (volume × chute de position).
+**L'équipe édito doit traiter ces pages dans l'ordre.**
+
+| Priorité | URL | KW perdus | Volume impacté | Diff moyen | Score |
+|----------|-----|-----------|----------------|------------|-------|
+"""
+            if 'url' in df_f.columns:
+                for i, row in urls_critiques.iterrows():
+                    prio = "🔴 URGENT" if row['score_total'] > urls_critiques['score_total'].quantile(0.9) else "🟠 MOYEN" if row['score_total'] > urls_critiques['score_total'].quantile(0.5) else "🟡 FAIBLE"
+                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {row['diff_moyen']:.1f} | {int(row['score_total']):,} |\n"
+
+            report += f"""
+
+---
+
+# 4. MOTS-CLÉS EN PERTE — LISTE COMPLÈTE ({len(df_pertes_rapport):,} KW)
+
+**Triés par score de priorité (volume × perte de position)**
+
+| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume | Score priorité |
+|---------|-----|--------------|--------------|------|--------|----------------|
+"""
+            for _, row in df_pertes_rapport.iterrows():
+                mc = str(row.get('mot_cle', 'N/A'))[:50]
+                url = str(row.get('url', 'N/A'))[:60]
+                anc = int(row.get('ancienne_pos', 0) or 0)
+                dern = int(row.get('derniere_pos', 0) or 0)
+                diff = int(row.get('diff_pos', 0) or 0)
+                vol = int(row.get('volume', 0) or 0)
+                score = int(row.get('priority_score', 0) or 0)
+                report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} | {score:,} |\n"
+
+            report += f"""
+
+---
+
+# 5. MOTS-CLÉS EN GAIN — LISTE COMPLÈTE ({len(df_gains_rapport):,} KW)
+
+**Ce qui fonctionne bien — à analyser pour répliquer**
+
+| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume |
+|---------|-----|--------------|--------------|------|--------|
+"""
+            for _, row in df_gains_rapport.iterrows():
+                mc = str(row.get('mot_cle', 'N/A'))[:50]
+                url = str(row.get('url', 'N/A'))[:60]
+                anc = int(row.get('ancienne_pos', 0) or 0)
+                dern = int(row.get('derniere_pos', 0) or 0)
+                diff = int(row.get('diff_pos', 0) or 0)
+                vol = int(row.get('volume', 0) or 0)
+                report += f"| {mc} | {url} | {anc} | {dern} | +{diff} | {vol:,} |\n"
+
+            report += f"""
+
+---
+
+# 6. RECOMMANDATIONS POUR L'ÉQUIPE ÉDITO
+
+## Actions immédiates (cette semaine)
+1. **Auditer les 10 premières URLs critiques** — Vérifier : contenu à jour ? maillage interne ? balises optimisées ?
+2. **Identifier les KW à fort volume perdus** — Filtrer les pertes avec volume > 1000
+3. **Vérifier la concurrence** — Les concurrents ont-ils amélioré leur contenu ?
+
+## Actions court terme (ce mois)
+1. **Mettre à jour les contenus des pages critiques** — Enrichir, actualiser, ajouter des sections
+2. **Renforcer le maillage interne** vers les pages en perte
+3. **Créer du contenu de support** pour les thématiques en baisse
+
+## Actions moyen terme (ce trimestre)
+1. **Audit technique** — Vérifier Core Web Vitals des pages impactées
+2. **Analyse des backlinks** — Les pages ont-elles perdu des liens ?
+3. **Stratégie de contenu** — Planifier les mises à jour récurrentes
+
+---
+
+# 7. MÉTRIQUES DE SUIVI
+
+Refaire cette analyse dans 1 mois pour mesurer :
+- [ ] Réduction du nombre de KW en perte
+- [ ] Récupération des positions sur les KW prioritaires
+- [ ] Amélioration du volume de recherche capté
+
+---
+
+_Rapport généré automatiquement — Haloscan SEO Diff Analyzer_
+_Données : {len(df):,} mots-clés analysés_
+"""
+            st.session_state['report'] = report
+            st.success("✅ Rapport généré !")
+        
+        if 'report' in st.session_state:
+            st.markdown(st.session_state['report'])
+            
+            st.divider()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "📥 Télécharger le rapport (Markdown)", 
+                    st.session_state['report'], 
+                    "rapport_seo_complet.md",
+                    "text/markdown"
+                )
+            with col2:
+                # Export aussi en CSV les données brutes
+                df_export = df_f[df_f['diff_pos'] < 0].sort_values('priority_score', ascending=False)
+                cols_export = [c for c in ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'priority_score'] if c in df_export.columns]
+                csv_export = df_export[cols_export].to_csv(index=False, sep=';').encode('utf-8')
+                st.download_button(
+                    "📥 Télécharger les données (CSV)",
+                    csv_export,
+                    "pertes_completes.csv",
+                    "text/csv"
+                )
 
 else:
     st.info("👆 Charge un fichier CSV pour commencer")
