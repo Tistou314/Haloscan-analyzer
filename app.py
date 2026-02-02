@@ -557,10 +557,6 @@ if uploaded_file:
                 if 'diff_total' in url_stats.columns:
                     url_stats['📊 SEO'] = url_stats['diff_total'].apply(tendance_seo_url)
                 
-                # Calculer le % santé si possible
-                if 'total_kw' in url_stats.columns and 'kw_perte' in url_stats.columns:
-                    url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
-                
                 # Ajouter tendance leads si dispo
                 if 'tendance_leads' in url_stats.columns:
                     url_stats = url_stats.rename(columns={'tendance_leads': '📊 LEADS'})
