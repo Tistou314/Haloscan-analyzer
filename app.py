@@ -61,37 +61,69 @@ def load_data(uploaded_file):
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, sep=';', encoding='cp1252')
     
-    # Normalisation des noms de colonnes
-    df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+    # Normalisation des noms de colonnes 
+    # 1. Strip espaces de début/fin
+    # 2. Lowercase
+    # 3. Remplacer espaces par underscore
+    # 4. Retirer caractères parasites (; : etc.)
+    df.columns = (df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(' ', '_', regex=False)
+        .str.replace(';', '', regex=False)
+        .str.replace(':', '', regex=False)
+        .str.replace('é', 'e', regex=False)
+        .str.replace('è', 'e', regex=False)
+        .str.replace('ê', 'e', regex=False)
+        .str.replace('à', 'a', regex=False)
+    )
     
-    # Renommage des colonnes courantes Haloscan
+    # Debug: afficher les colonnes après nettoyage
+    original_cols = list(df.columns)
+    
+    # Renommage des colonnes courantes Haloscan - mapping étendu
     column_mapping = {
-        'mot-clé_(mc)': 'mot_cle',
-        'mot-clé': 'mot_cle',
-        'mot_clé_(mc)': 'mot_cle',
+        # Mot-clé - toutes les variantes possibles
+        'mot-cle_(mc)': 'mot_cle',
         'mot_cle_(mc)': 'mot_cle',
+        'mot-cle': 'mot_cle',
+        'mot_cle': 'mot_cle',
         'mc': 'mot_cle',
         'keyword': 'mot_cle',
-        'dernière_pos': 'derniere_pos',
+        'kw': 'mot_cle',
+        # Position actuelle
         'derniere_pos': 'derniere_pos',
-        'derniãre_pos': 'derniere_pos',
         'position': 'derniere_pos',
+        'pos': 'derniere_pos',
+        'current_pos': 'derniere_pos',
+        # Ancienne position
         'vieille_pos': 'ancienne_pos',
         'plus_vieille_pos': 'ancienne_pos',
+        'ancienne_pos': 'ancienne_pos',
         'old_pos': 'ancienne_pos',
+        'previous_pos': 'ancienne_pos',
+        # Meilleure position
         'meilleure_pos': 'meilleure_pos',
         'best_pos': 'meilleure_pos',
+        # Diff
         'pos_perdues': 'pos_perdues',
         'diff_pos': 'diff_pos',
         'diff': 'diff_pos',
+        'delta': 'diff_pos',
+        'variation': 'diff_pos',
+        # Volume
         'volume': 'volume',
         'vol': 'volume',
         'volumeh': 'volumeh',
+        # Statut
         'statut': 'statut',
         'status': 'statut',
+        # Trafic
         'trafic': 'trafic',
         'traffic': 'trafic',
+        # URL
         'url': 'url',
+        # Autres
         'cpc': 'cpc',
         'comp': 'competition',
         'competition': 'competition'
@@ -322,9 +354,9 @@ if uploaded_file:
         
         st.success(f"✅ {len(df):,} mots-clés chargés")
     
-    # Affichage des colonnes détectées
+    # Affichage des colonnes détectées (pour debug)
     with st.sidebar:
-        with st.expander("🔍 Colonnes détectées"):
+        with st.expander("🔍 Colonnes détectées", expanded=True):
             st.write(list(df.columns))
     
     # ==========================================================================
@@ -582,28 +614,34 @@ if uploaded_file:
         st.header("🔴 Pertes critiques")
         st.markdown("Mots-clés triés par **score de priorité** (volume × diff × facteur position)")
         
-        df_pertes = df_filtered[df_filtered['diff_pos'] < 0].sort_values('priority_score', ascending=False)
-        
-        st.info(f"**{len(df_pertes):,}** mots-clés en perte de position")
-        
-        # Colonnes à afficher
-        cols_display = ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'trafic', 'priority_score']
-        cols_display = [c for c in cols_display if c in df_pertes.columns]
-        
-        st.dataframe(
-            df_pertes[cols_display].head(500),
-            use_container_width=True,
-            height=600
-        )
-        
-        # Export
-        csv_pertes = df_pertes[cols_display].to_csv(index=False, sep=';').encode('utf-8')
-        st.download_button(
-            "📥 Exporter les pertes critiques (CSV)",
-            csv_pertes,
-            "pertes_critiques.csv",
-            "text/csv"
-        )
+        if 'diff_pos' not in df_filtered.columns:
+            st.error("❌ Colonne 'diff_pos' non trouvée dans le fichier. Vérifiez le format de votre export Haloscan.")
+            st.info("Colonnes disponibles : " + ", ".join(df_filtered.columns.tolist()))
+        else:
+            df_pertes = df_filtered[df_filtered['diff_pos'] < 0].copy()
+            if 'priority_score' in df_pertes.columns:
+                df_pertes = df_pertes.sort_values('priority_score', ascending=False)
+            
+            st.info(f"**{len(df_pertes):,}** mots-clés en perte de position")
+            
+            # Colonnes à afficher
+            cols_display = ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'trafic', 'priority_score']
+            cols_display = [c for c in cols_display if c in df_pertes.columns]
+            
+            st.dataframe(
+                df_pertes[cols_display].head(500),
+                use_container_width=True,
+                height=600
+            )
+            
+            # Export
+            csv_pertes = df_pertes[cols_display].to_csv(index=False, sep=';').encode('utf-8')
+            st.download_button(
+                "📥 Exporter les pertes critiques (CSV)",
+                csv_pertes,
+                "pertes_critiques.csv",
+                "text/csv"
+            )
     
     # ==========================================================================
     # TAB 3 : PAR URL
