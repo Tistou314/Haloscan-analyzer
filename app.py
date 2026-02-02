@@ -770,12 +770,23 @@ if uploaded_file:
 |----------|-----|-----------|--------|-------------|-------------|-------------|
 """
                     for i, row in urls_critiques.iterrows():
-                        leads_evol = row.get('leads_evolution', 0) or 0
+                        leads_evol = row.get('leads_evolution', 0)
+                        leads_evol = 0 if pd.isna(leads_evol) else leads_evol
                         tendance = row.get('tendance_leads', '➡️ N/A')
                         prio = "🔴 CRITIQUE" if leads_evol < -100 else \
                                "🟠 URGENT" if leads_evol < -20 else \
                                "🟡 MOYEN" if leads_evol < 0 else "⚪ STABLE/HAUSSE"
-                        report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0) or 0):,} | {int(row.get('leads_avant', 0) or 0):,} | {int(row.get('leads_apres', 0) or 0):,} | {tendance} |\n"
+                        
+                        # Sécuriser toutes les valeurs numériques
+                        nb_kw = int(row.get('nb_kw_perdus', 0) or 0)
+                        vol = row.get('volume_impacte', 0)
+                        vol = 0 if pd.isna(vol) else int(vol)
+                        l_avant = row.get('leads_avant', 0)
+                        l_avant = 0 if pd.isna(l_avant) else int(l_avant)
+                        l_apres = row.get('leads_apres', 0)
+                        l_apres = 0 if pd.isna(l_apres) else int(l_apres)
+                        
+                        report += f"| {prio} | {row['url']} | {nb_kw} | {vol:,} | {l_avant:,} | {l_apres:,} | {tendance} |\n"
                 else:
                     report += """**Triées par nombre de mots-clés perdus**
 
