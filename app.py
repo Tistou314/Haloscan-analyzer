@@ -806,45 +806,88 @@ _Aucune URL en perte détectée_
 
 """
 
+            # Filtrer les KW qui ont vraiment morflé (grosses pertes uniquement)
+            # Priorité : diff très négative + volume élevé
+            df_pertes_critiques = df_pertes_rapport[df_pertes_rapport['diff_pos'] <= -5].copy()
+            
+            # Trier par diff_pos (les pires en premier), puis par volume
+            if 'volume' in df_pertes_critiques.columns:
+                df_pertes_critiques = df_pertes_critiques.sort_values(
+                    ['diff_pos', 'volume'], 
+                    ascending=[True, False]
+                )
+            
+            # Limiter à 500 KW max
+            max_kw_rapport = 500
+            df_pertes_limited = df_pertes_critiques.head(max_kw_rapport)
+            
             report += f"""
 
 ---
 
-# 4. MOTS-CLÉS EN PERTE — LISTE COMPLÈTE ({len(df_pertes_rapport):,} KW)
+# 4. PERTES CRITIQUES — TOP {len(df_pertes_limited):,} (pertes ≥ 5 positions)
 
-**Triés par importance de la perte de position**
+**⚠️ Priorité maximale : KW avec fortes pertes de positions**
 
 | Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume |
 |---------|-----|--------------|--------------|------|--------|
 """
-            for _, row in df_pertes_rapport.iterrows():
+            for _, row in df_pertes_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
                 url = str(row.get('url', 'N/A'))[:60]
-                anc = int(row.get('ancienne_pos', 0) or 0)
-                dern = int(row.get('derniere_pos', 0) or 0)
-                diff = int(row.get('diff_pos', 0) or 0)
-                vol = int(row.get('volume', 0) or 0)
+                anc = row.get('ancienne_pos', 0)
+                anc = 0 if pd.isna(anc) else int(anc)
+                dern = row.get('derniere_pos', 0)
+                dern = 0 if pd.isna(dern) else int(dern)
+                diff = row.get('diff_pos', 0)
+                diff = 0 if pd.isna(diff) else int(diff)
+                vol = row.get('volume', 0)
+                vol = 0 if pd.isna(vol) else int(vol)
                 report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} |\n"
+            
+            # Info sur les KW non affichés
+            nb_petites_pertes = len(df_pertes_rapport) - len(df_pertes_critiques)
+            if nb_petites_pertes > 0:
+                report += f"\n_+ {nb_petites_pertes:,} KW avec des pertes < 5 positions (non affichés)_\n"
 
+            # Filtrer les KW avec gains significatifs (≥ 5 positions)
+            df_gains_significatifs = df_gains_rapport[df_gains_rapport['diff_pos'] >= 5].copy()
+            
+            if 'volume' in df_gains_significatifs.columns:
+                df_gains_significatifs = df_gains_significatifs.sort_values(
+                    ['diff_pos', 'volume'], 
+                    ascending=[False, False]
+                )
+            
+            df_gains_limited = df_gains_significatifs.head(max_kw_rapport)
+            
             report += f"""
 
 ---
 
-# 5. MOTS-CLÉS EN GAIN — LISTE COMPLÈTE ({len(df_gains_rapport):,} KW)
+# 5. GAINS SIGNIFICATIFS — TOP {len(df_gains_limited):,} (gains ≥ 5 positions)
 
-**Ce qui fonctionne bien — à analyser pour répliquer**
+**✅ Ce qui fonctionne — à analyser pour répliquer**
 
 | Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume |
 |---------|-----|--------------|--------------|------|--------|
 """
-            for _, row in df_gains_rapport.iterrows():
+            for _, row in df_gains_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
                 url = str(row.get('url', 'N/A'))[:60]
-                anc = int(row.get('ancienne_pos', 0) or 0)
-                dern = int(row.get('derniere_pos', 0) or 0)
-                diff = int(row.get('diff_pos', 0) or 0)
-                vol = int(row.get('volume', 0) or 0)
+                anc = row.get('ancienne_pos', 0)
+                anc = 0 if pd.isna(anc) else int(anc)
+                dern = row.get('derniere_pos', 0)
+                dern = 0 if pd.isna(dern) else int(dern)
+                diff = row.get('diff_pos', 0)
+                diff = 0 if pd.isna(diff) else int(diff)
+                vol = row.get('volume', 0)
+                vol = 0 if pd.isna(vol) else int(vol)
                 report += f"| {mc} | {url} | {anc} | {dern} | +{diff} | {vol:,} |\n"
+            
+            nb_petits_gains = len(df_gains_rapport) - len(df_gains_significatifs)
+            if nb_petits_gains > 0:
+                report += f"\n_+ {nb_petits_gains:,} KW avec des gains < 5 positions (non affichés)_\n"
 
             report += f"""
 
