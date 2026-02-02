@@ -292,13 +292,25 @@ if uploaded_file:
             df_pertes_temp = df_f[df_f['diff_pos'] < 0]
             if has_leads_merged and len(df_pertes_temp) > 0 and 'priority_score_business' in df_pertes_temp.columns and 'leads_total' in df_pertes_temp.columns:
                 st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
-                df_perte_urls = df_pertes_temp.groupby('url').agg(
-                    kw_perdus=('diff_pos', 'count'),
-                    volume_perdu=('volume', 'sum'),
-                    leads_total=('leads_total', 'first'),
-                    leads_evolution=('leads_evolution', 'first'),
-                    score=('priority_score_business', 'sum')
-                ).reset_index().sort_values('score', ascending=False).head(15)
+                
+                # Construire l'agrégation dynamiquement selon les colonnes disponibles
+                agg_dict_dash = {'diff_pos': ('diff_pos', 'count')}
+                if 'volume' in df_pertes_temp.columns:
+                    agg_dict_dash['volume_perdu'] = ('volume', 'sum')
+                if 'leads_total' in df_pertes_temp.columns:
+                    agg_dict_dash['leads_total'] = ('leads_total', 'first')
+                if 'leads_evolution' in df_pertes_temp.columns:
+                    agg_dict_dash['leads_evolution'] = ('leads_evolution', 'first')
+                if 'priority_score_business' in df_pertes_temp.columns:
+                    agg_dict_dash['score'] = ('priority_score_business', 'sum')
+                
+                df_perte_urls = df_pertes_temp.groupby('url').agg(**agg_dict_dash).reset_index()
+                df_perte_urls = df_perte_urls.rename(columns={'diff_pos': 'kw_perdus'})
+                
+                if 'score' in df_perte_urls.columns:
+                    df_perte_urls = df_perte_urls.sort_values('score', ascending=False).head(15)
+                else:
+                    df_perte_urls = df_perte_urls.sort_values('kw_perdus', ascending=False).head(15)
                 
                 st.dataframe(df_perte_urls, use_container_width=True)
         except Exception as e:
@@ -320,44 +332,75 @@ if uploaded_file:
     with tab3:
         st.header("📁 Analyse par URL")
         if 'url' in df_f.columns:
-            # Agrégation avec leads
-            agg_dict = {
-                'diff_pos': ['count', lambda x: (x < 0).sum(), lambda x: (x > 0).sum(), 'mean'],
-                'volume': 'sum',
-                'priority_score': 'sum',
-            }
-            if has_leads_merged:
-                agg_dict['leads_total'] = 'first'
-                agg_dict['leads_avant'] = 'first'
-                agg_dict['leads_apres'] = 'first'
-                agg_dict['leads_evolution'] = 'first'
-                agg_dict['priority_score_business'] = 'sum'
-            
-            url_stats = df_f.groupby('url').agg(agg_dict).reset_index()
-            url_stats.columns = ['url', 'total_kw', 'kw_perte', 'kw_gain', 'diff_moyen', 'volume'] + \
-                               (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads_merged else []) + \
-                               ['score']
-            
-            url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
-            
-            # Tri par score business si dispo, sinon score normal
-            sort_col = 'score_business' if has_leads_merged else 'score'
-            url_stats = url_stats.sort_values(sort_col, ascending=False)
-            
-            st.info(f"**{len(url_stats):,}** URLs analysées — Affichage complet")
-            
-            # Afficher avec mise en forme conditionnelle
-            st.dataframe(url_stats, use_container_width=True, height=500)
-            
-            # Export complet
-            csv_urls = url_stats.to_csv(index=False, sep=';').encode('utf-8')
-            st.download_button("📥 Exporter TOUTES les URLs (CSV)", csv_urls, "analyse_urls_complete.csv")
+            try:
+                # Construire l'agrégation dynamiquement
+                agg_funcs = {
+                    'diff_pos': ['count', lambda x: (x < 0).sum(), lambda x: (x > 0).sum(), 'mean'],
+                }
+                if 'volume' in df_f.columns:
+                    agg_funcs['volume'] = 'sum'
+                if 'priority_score' in df_f.columns:
+                    agg_funcs['priority_score'] = 'sum'
+                if has_leads_merged:
+                    if 'leads_total' in df_f.columns:
+                        agg_funcs['leads_total'] = 'first'
+                    if 'leads_avant' in df_f.columns:
+                        agg_funcs['leads_avant'] = 'first'
+                    if 'leads_apres' in df_f.columns:
+                        agg_funcs['leads_apres'] = 'first'
+                    if 'leads_evolution' in df_f.columns:
+                        agg_funcs['leads_evolution'] = 'first'
+                    if 'priority_score_business' in df_f.columns:
+                        agg_funcs['priority_score_business'] = 'sum'
+                
+                url_stats = df_f.groupby('url').agg(agg_funcs).reset_index()
+                
+                # Aplatir les colonnes multi-index
+                new_cols = ['url']
+                for col in url_stats.columns[1:]:
+                    if isinstance(col, tuple):
+                        new_cols.append(f"{col[0]}_{col[1]}" if col[1] != 'sum' and col[1] != 'first' else col[0])
+                    else:
+                        new_cols.append(col)
+                url_stats.columns = new_cols
+                
+                # Renommer les colonnes pour plus de clarté
+                rename_dict = {
+                    'diff_pos_count': 'total_kw',
+                    'diff_pos_<lambda_0>': 'kw_perte', 
+                    'diff_pos_<lambda_1>': 'kw_gain',
+                    'diff_pos_mean': 'diff_moyen'
+                }
+                url_stats = url_stats.rename(columns=rename_dict)
+                
+                # Calculer le % santé si possible
+                if 'total_kw' in url_stats.columns and 'kw_perte' in url_stats.columns:
+                    url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
+                
+                # Tri
+                if 'priority_score_business' in url_stats.columns:
+                    url_stats = url_stats.sort_values('priority_score_business', ascending=False)
+                elif 'priority_score' in url_stats.columns:
+                    url_stats = url_stats.sort_values('priority_score', ascending=False)
+                else:
+                    url_stats = url_stats.sort_values('total_kw', ascending=False)
+                
+                st.info(f"**{len(url_stats):,}** URLs analysées")
+                st.dataframe(url_stats, use_container_width=True, height=500)
+                
+                # Export
+                csv_urls = url_stats.to_csv(index=False, sep=';').encode('utf-8')
+                st.download_button("📥 Exporter TOUTES les URLs (CSV)", csv_urls, "analyse_urls_complete.csv")
+                
+            except Exception as e:
+                st.error(f"Erreur lors de l'analyse par URL: {e}")
             
             st.divider()
             
             # Détail URL
             st.subheader("🔍 Détail d'une URL")
-            url_sel = st.selectbox("Sélectionner une URL", url_stats['url'].tolist())
+            url_list = df_f['url'].unique().tolist()[:100]
+            url_sel = st.selectbox("Sélectionner une URL", url_list)
             if url_sel:
                 df_url = df_f[df_f['url'] == url_sel]
                 
@@ -372,9 +415,9 @@ if uploaded_file:
                 if has_leads_merged and 'leads_total' in df_url.columns:
                     c1, c2, c3, c4 = st.columns(4)
                     leads_t = df_url['leads_total'].iloc[0] if len(df_url) > 0 else 0
-                    leads_av = df_url['leads_avant'].iloc[0] if len(df_url) > 0 else 0
-                    leads_ap = df_url['leads_apres'].iloc[0] if len(df_url) > 0 else 0
-                    leads_e = df_url['leads_evolution'].iloc[0] if len(df_url) > 0 else 0
+                    leads_av = df_url['leads_avant'].iloc[0] if len(df_url) > 0 and 'leads_avant' in df_url.columns else 0
+                    leads_ap = df_url['leads_apres'].iloc[0] if len(df_url) > 0 and 'leads_apres' in df_url.columns else 0
+                    leads_e = df_url['leads_evolution'].iloc[0] if len(df_url) > 0 and 'leads_evolution' in df_url.columns else 0
                     c1.metric("📊 Leads total", f"{int(leads_t or 0):,}")
                     c2.metric("📊 Leads AVANT", f"{int(leads_av or 0):,}")
                     c3.metric("📊 Leads APRÈS", f"{int(leads_ap or 0):,}")
