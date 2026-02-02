@@ -288,17 +288,21 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
         
         # Top URLs impactées avec leads
-        if has_leads_merged and 'priority_score_business' in df_f.columns and 'leads_total' in df_f.columns:
-            st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
-            df_perte_urls = df_f[df_f['diff_pos'] < 0].groupby('url').agg(
-                kw_perdus=('diff_pos', 'count'),
-                volume_perdu=('volume', 'sum'),
-                leads_total=('leads_total', 'first'),
-                leads_evolution=('leads_evolution', 'first'),
-                score=('priority_score_business', 'sum')
-            ).reset_index().sort_values('score', ascending=False).head(15)
-            
-            st.dataframe(df_perte_urls, use_container_width=True)
+        try:
+            df_pertes_temp = df_f[df_f['diff_pos'] < 0]
+            if has_leads_merged and len(df_pertes_temp) > 0 and 'priority_score_business' in df_pertes_temp.columns and 'leads_total' in df_pertes_temp.columns:
+                st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
+                df_perte_urls = df_pertes_temp.groupby('url').agg(
+                    kw_perdus=('diff_pos', 'count'),
+                    volume_perdu=('volume', 'sum'),
+                    leads_total=('leads_total', 'first'),
+                    leads_evolution=('leads_evolution', 'first'),
+                    score=('priority_score_business', 'sum')
+                ).reset_index().sort_values('score', ascending=False).head(15)
+                
+                st.dataframe(df_perte_urls, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Impossible d'afficher les URLs critiques: {e}")
     
     # TAB 2: PERTES
     with tab2:
