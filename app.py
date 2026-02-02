@@ -172,7 +172,7 @@ if uploaded_file:
         df['leads_apres'] = 0
         df['leads_evolution'] = 0
         df['priority_score_business'] = df['priority_score']
-        if has_leads_merged:
+        if has_leads:
             st.warning("⚠️ Fichier leads chargé mais colonne 'url' manquante dans le CSV Haloscan")
         st.success(f"✅ {len(df):,} mots-clés chargés")
         has_leads_merged = False
@@ -288,7 +288,7 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
         
         # Top URLs impactées avec leads
-        if has_leads_merged:
+        if has_leads_merged and 'priority_score_business' in df_f.columns and 'leads_total' in df_f.columns:
             st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
             df_perte_urls = df_f[df_f['diff_pos'] < 0].groupby('url').agg(
                 kw_perdus=('diff_pos', 'count'),
