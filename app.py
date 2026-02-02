@@ -49,6 +49,10 @@ def load_data(uploaded_file):
     }
     df = df.rename(columns=mapping)
     
+    # Créer colonne 'volume' à partir de 'volumeh' si elle n'existe pas
+    if 'volume' not in df.columns and 'volumeh' in df.columns:
+        df['volume'] = df['volumeh']
+    
     # Conversion numérique
     for col in ['derniere_pos', 'ancienne_pos', 'meilleure_pos', 'diff_pos', 'volume', 'volumeh', 'trafic', 'cpc']:
         if col in df.columns:
@@ -71,8 +75,13 @@ def normalize_url(url):
     url = url.replace('https://', '').replace('http://', '')
     # Retirer www.
     url = url.replace('www.', '')
+    # Retirer les doubles slashes (problème fréquent)
+    while '//' in url:
+        url = url.replace('//', '/')
     # Retirer le slash final
     url = url.rstrip('/')
+    # Retirer le slash initial si présent
+    url = url.lstrip('/')
     return url
 
 # =============================================================================
@@ -162,9 +171,47 @@ if uploaded_file:
             on='url_normalized', 
             how='left'
         )
-        # Score de priorité enrichi : intègre les leads
-        df['priority_score_business'] = df['priority_score'] * (1 + df['leads_total'].fillna(0) / 100)
+        
+        # Créer indicateur visuel de tendance leads
+        def tendance_leads(row):
+            evol = row.get('leads_evolution', 0) or 0
+            pct = row.get('leads_evolution_pct', 0) or 0
+            if evol < -10 or pct < -20:
+                return "🔻🔻 CHUTE"
+            elif evol < 0:
+                return "🔻 Baisse"
+            elif evol == 0:
+                return "➡️ Stable"
+            elif evol > 10 or pct > 20:
+                return "🔺🔺 BOOM"
+            else:
+                return "🔺 Hausse"
+        
+        df['tendance_leads'] = df.apply(tendance_leads, axis=1)
+        
+        # Score de priorité enrichi : 
+        # - priority_score = volume recherche × |diff_pos|
+        # - On booste si l'URL génère des leads (leads_total)
+        # - On booste ENCORE PLUS si les leads sont en baisse (leads_evolution < 0)
+        base_score = df['priority_score']
+        leads_boost = (1 + df['leads_total'].fillna(0) / 100)  # Plus de leads = plus important
+        
+        # Malus si les leads baissent (évolution négative)
+        leads_trend = df['leads_evolution'].fillna(0)
+        trend_multiplier = 1 + (leads_trend.clip(upper=0).abs() / 100)  # Perte de leads = urgence
+        
+        df['priority_score_business'] = base_score * leads_boost * trend_multiplier
+        
+        # Flag pour identifier les URLs en double peine (perte SEO + perte leads)
+        df['double_peine'] = (df['diff_pos'] < 0) & (df['leads_evolution'] < 0)
+        
         st.success(f"✅ {len(df):,} mots-clés chargés — Données leads croisées !")
+        
+        # Stats de matching
+        urls_avec_leads = df[df['leads_total'].notna() & (df['leads_total'] > 0)]['url'].nunique()
+        urls_double_peine = df[df['double_peine'] == True]['url'].nunique()
+        st.info(f"📊 {urls_avec_leads} URLs avec leads | ⚠️ {urls_double_peine} URLs en double peine (perte SEO + perte leads)")
+        
         has_leads_merged = True
     else:
         df['leads_total'] = 0
@@ -274,6 +321,36 @@ if uploaded_file:
             leads_evol = df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum()
             delta_color = "inverse" if leads_evol < 0 else "normal"
             c4.metric("📊 Évol. leads (période)", f"{int(leads_evol):+,}", delta_color=delta_color)
+            
+            # Section DOUBLE PEINE
+            if 'double_peine' in df_f.columns:
+                df_double_peine = df_f[df_f['double_peine'] == True]
+                if len(df_double_peine) > 0:
+                    st.divider()
+                    st.subheader("🚨 ALERTE : URLs en DOUBLE PEINE (perte SEO + perte leads)")
+                    st.error(f"**{df_double_peine['url'].nunique()}** URLs perdent à la fois des positions ET des leads !")
+                    
+                    # Tableau des URLs double peine
+                    agg_dp = {'diff_pos': 'count', 'priority_score_business': 'sum'}
+                    if 'leads_avant' in df_double_peine.columns:
+                        agg_dp['leads_avant'] = 'first'
+                    if 'leads_apres' in df_double_peine.columns:
+                        agg_dp['leads_apres'] = 'first'
+                    if 'leads_evolution' in df_double_peine.columns:
+                        agg_dp['leads_evolution'] = 'first'
+                    if 'tendance_leads' in df_double_peine.columns:
+                        agg_dp['tendance_leads'] = 'first'
+                    
+                    df_dp_urls = df_double_peine.groupby('url').agg(agg_dp).reset_index()
+                    
+                    # Renommer les colonnes
+                    col_rename = {'url': 'URL', 'diff_pos': 'KW perdus', 'leads_avant': 'Leads AVANT', 
+                                  'leads_apres': 'Leads APRÈS', 'leads_evolution': 'Évol.', 
+                                  'tendance_leads': '📊 TENDANCE', 'priority_score_business': 'Score Urgence'}
+                    df_dp_urls = df_dp_urls.rename(columns=col_rename)
+                    df_dp_urls = df_dp_urls.sort_values('Score Urgence', ascending=False)
+                    
+                    st.dataframe(df_dp_urls.head(20), use_container_width=True, hide_index=True)
         
         st.divider()
         
@@ -301,6 +378,8 @@ if uploaded_file:
                     agg_dict_dash['leads_total'] = ('leads_total', 'first')
                 if 'leads_evolution' in df_pertes_temp.columns:
                     agg_dict_dash['leads_evolution'] = ('leads_evolution', 'first')
+                if 'tendance_leads' in df_pertes_temp.columns:
+                    agg_dict_dash['tendance_leads'] = ('tendance_leads', 'first')
                 if 'priority_score_business' in df_pertes_temp.columns:
                     agg_dict_dash['score'] = ('priority_score_business', 'sum')
                 
@@ -350,6 +429,8 @@ if uploaded_file:
                         agg_funcs['leads_apres'] = 'first'
                     if 'leads_evolution' in df_f.columns:
                         agg_funcs['leads_evolution'] = 'first'
+                    if 'tendance_leads' in df_f.columns:
+                        agg_funcs['tendance_leads'] = 'first'
                     if 'priority_score_business' in df_f.columns:
                         agg_funcs['priority_score_business'] = 'sum'
                 
@@ -456,23 +537,39 @@ if uploaded_file:
             
             # URLs les plus impactées
             if 'url' in df_f.columns:
-                agg_url = {
-                    'diff_pos': 'count',
-                    'volume': 'sum',
-                    'priority_score': 'sum',
-                }
+                # Construire l'agrégation dynamiquement selon les colonnes disponibles
+                agg_url = {'diff_pos': 'count'}
+                if 'volume' in df_pertes_rapport.columns:
+                    agg_url['volume'] = 'sum'
+                if 'priority_score' in df_pertes_rapport.columns:
+                    agg_url['priority_score'] = 'sum'
                 if has_leads_merged:
-                    agg_url['leads_total'] = 'first'
-                    agg_url['leads_avant'] = 'first'
-                    agg_url['leads_apres'] = 'first'
-                    agg_url['leads_evolution'] = 'first'
-                    agg_url['priority_score_business'] = 'sum'
+                    if 'leads_total' in df_pertes_rapport.columns:
+                        agg_url['leads_total'] = 'first'
+                    if 'leads_avant' in df_pertes_rapport.columns:
+                        agg_url['leads_avant'] = 'first'
+                    if 'leads_apres' in df_pertes_rapport.columns:
+                        agg_url['leads_apres'] = 'first'
+                    if 'leads_evolution' in df_pertes_rapport.columns:
+                        agg_url['leads_evolution'] = 'first'
+                    if 'tendance_leads' in df_pertes_rapport.columns:
+                        agg_url['tendance_leads'] = 'first'
+                    if 'priority_score_business' in df_pertes_rapport.columns:
+                        agg_url['priority_score_business'] = 'sum'
                 
                 urls_critiques = df_pertes_rapport.groupby('url').agg(agg_url).reset_index()
-                urls_critiques.columns = ['url', 'nb_kw_perdus', 'volume_impacte', 'score_seo'] + \
-                                        (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads_merged else [])
                 
-                sort_col = 'score_business' if has_leads_merged else 'score_seo'
+                # Renommer les colonnes
+                rename_cols = {'diff_pos': 'nb_kw_perdus', 'volume': 'volume_impacte', 'priority_score': 'score_seo', 'priority_score_business': 'score_business'}
+                urls_critiques = urls_critiques.rename(columns=rename_cols)
+                
+                # Tri
+                if 'score_business' in urls_critiques.columns:
+                    sort_col = 'score_business'
+                elif 'score_seo' in urls_critiques.columns:
+                    sort_col = 'score_seo'
+                else:
+                    sort_col = 'nb_kw_perdus'
                 urls_critiques = urls_critiques.sort_values(sort_col, ascending=False)
             
             # Calcul impact leads
@@ -544,15 +641,16 @@ if uploaded_file:
             if has_leads_merged:
                 report += """**Triées par SCORE BUSINESS (SEO × Leads)** — Les URLs avec pertes SEO ET leads historiques sont en priorité maximale.
 
-| Priorité | URL | KW perdus | Volume | Leads total | Leads avant | Leads après | Évol. | Score |
-|----------|-----|-----------|--------|-------------|-------------|-------------|-------|-------|
+| Priorité | URL | KW perdus | Volume | Leads AVANT | Leads APRÈS | 📊 TENDANCE | Score |
+|----------|-----|-----------|--------|-------------|-------------|-------------|-------|
 """
                 for i, row in urls_critiques.iterrows():
-                    score = row.get('score_business', row.get('score_seo', 0))
+                    score = row.get('score_business', row.get('score_seo', 0)) or 0
+                    tendance = row.get('tendance_leads', '➡️ N/A')
                     prio = "🔴 CRITIQUE" if row.get('leads_total', 0) > 100 and row['nb_kw_perdus'] > 5 else \
-                           "🟠 URGENT" if score > urls_critiques[sort_col].quantile(0.9) else \
-                           "🟡 MOYEN" if score > urls_critiques[sort_col].quantile(0.5) else "⚪ FAIBLE"
-                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {int(row.get('leads_total', 0) or 0):,} | {int(row.get('leads_avant', 0) or 0):,} | {int(row.get('leads_apres', 0) or 0):,} | {int(row.get('leads_evolution', 0) or 0):+,} | {int(score):,} |\n"
+                           "🟠 URGENT" if sort_col in urls_critiques.columns and score > urls_critiques[sort_col].quantile(0.9) else \
+                           "🟡 MOYEN" if sort_col in urls_critiques.columns and score > urls_critiques[sort_col].quantile(0.5) else "⚪ FAIBLE"
+                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0) or 0):,} | {int(row.get('leads_avant', 0) or 0):,} | {int(row.get('leads_apres', 0) or 0):,} | {tendance} | {int(score):,} |\n"
             else:
                 report += """**Triées par score de priorité (volume × perte)**
 
@@ -560,8 +658,11 @@ if uploaded_file:
 |----------|-----|-----------|----------------|-------|
 """
                 for i, row in urls_critiques.iterrows():
-                    prio = "🔴 URGENT" if row['score_seo'] > urls_critiques['score_seo'].quantile(0.9) else "🟠 MOYEN" if row['score_seo'] > urls_critiques['score_seo'].quantile(0.5) else "🟡 FAIBLE"
-                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {int(row['score_seo']):,} |\n"
+                    score_val = row.get('score_seo', row.get('nb_kw_perdus', 0)) or 0
+                    q90 = urls_critiques[sort_col].quantile(0.9) if sort_col in urls_critiques.columns else 0
+                    q50 = urls_critiques[sort_col].quantile(0.5) if sort_col in urls_critiques.columns else 0
+                    prio = "🔴 URGENT" if score_val > q90 else "🟠 MOYEN" if score_val > q50 else "🟡 FAIBLE"
+                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0) or 0):,} | {int(score_val):,} |\n"
 
             report += f"""
 
