@@ -68,10 +68,13 @@ def load_data(uploaded_file):
     column_mapping = {
         'mot-clé_(mc)': 'mot_cle',
         'mot-clé': 'mot_cle',
+        'mot_clé_(mc)': 'mot_cle',
+        'mot_cle_(mc)': 'mot_cle',
         'mc': 'mot_cle',
         'keyword': 'mot_cle',
         'dernière_pos': 'derniere_pos',
         'derniere_pos': 'derniere_pos',
+        'derniãre_pos': 'derniere_pos',
         'position': 'derniere_pos',
         'vieille_pos': 'ancienne_pos',
         'plus_vieille_pos': 'ancienne_pos',
@@ -434,16 +437,16 @@ if uploaded_file:
     else:
         pertes = gains = stables = sortis = 0
     
-    # Calculs de volume/trafic
+    # Calculs de volume/trafic (avec gestion des NaN)
     if 'volume' in df_filtered.columns and 'diff_pos' in df_filtered.columns:
-        volume_perdu = int(df_filtered[df_filtered['diff_pos'] < 0]['volume'].sum())
-        volume_gagne = int(df_filtered[df_filtered['diff_pos'] > 0]['volume'].sum())
+        volume_perdu = int(df_filtered[df_filtered['diff_pos'] < 0]['volume'].fillna(0).sum())
+        volume_gagne = int(df_filtered[df_filtered['diff_pos'] > 0]['volume'].fillna(0).sum())
     else:
         volume_perdu = volume_gagne = 0
     
     if 'trafic' in df_filtered.columns and 'diff_pos' in df_filtered.columns:
-        trafic_perdu = int(df_filtered[df_filtered['diff_pos'] < 0]['trafic'].sum())
-        trafic_gagne = int(df_filtered[df_filtered['diff_pos'] > 0]['trafic'].sum())
+        trafic_perdu = int(df_filtered[df_filtered['diff_pos'] < 0]['trafic'].fillna(0).sum())
+        trafic_gagne = int(df_filtered[df_filtered['diff_pos'] > 0]['trafic'].fillna(0).sum())
     else:
         trafic_perdu = trafic_gagne = 0
     
@@ -642,7 +645,7 @@ if uploaded_file:
                 with col2:
                     st.metric("KW en perte", len(df_url[df_url['diff_pos'] < 0]))
                 with col3:
-                    st.metric("Volume total", f"{int(df_url['volume'].sum()):,}")
+                    st.metric("Volume total", f"{int(df_url['volume'].fillna(0).sum()):,}")
                 
                 cols_url = ['mot_cle', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'statut']
                 cols_url = [c for c in cols_url if c in df_url.columns]
