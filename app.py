@@ -106,7 +106,30 @@ periode_avant = []
 periode_apres = []
 
 if uploaded_leads:
-    leads_df_raw = pd.read_excel(uploaded_leads)
+    # Lire la feuille "Leads totaux par urls" (pas la première feuille qui contient les visites)
+    try:
+        xlsx = pd.ExcelFile(uploaded_leads)
+        # Chercher la feuille des leads
+        leads_sheet = None
+        for sheet in xlsx.sheet_names:
+            if 'lead' in sheet.lower():
+                leads_sheet = sheet
+                break
+        
+        if leads_sheet:
+            leads_df_raw = pd.read_excel(xlsx, sheet_name=leads_sheet)
+            st.sidebar.success(f"📊 Feuille chargée : {leads_sheet}")
+        else:
+            # Par défaut, prendre la 2e feuille si elle existe, sinon la 1ère
+            if len(xlsx.sheet_names) > 1:
+                leads_df_raw = pd.read_excel(xlsx, sheet_name=1)
+                st.sidebar.info(f"📊 Feuille chargée : {xlsx.sheet_names[1]}")
+            else:
+                leads_df_raw = pd.read_excel(xlsx, sheet_name=0)
+                st.sidebar.info(f"📊 Feuille chargée : {xlsx.sheet_names[0]}")
+    except Exception as e:
+        leads_df_raw = pd.read_excel(uploaded_leads)
+        st.sidebar.warning(f"Lecture par défaut (erreur: {e})")
     
     # Identifier les colonnes de mois
     month_cols = [col for col in leads_df_raw.columns if col != 'url' and '_' in str(col)]
