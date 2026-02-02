@@ -830,7 +830,7 @@ _Aucune URL en perte détectée_
 """
             for _, row in df_pertes_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
-                url = str(row.get('url', 'N/A'))[:60]
+                url = str(row.get('url', 'N/A'))
                 anc = row.get('ancienne_pos', 0)
                 anc = 0 if pd.isna(anc) else int(anc)
                 dern = row.get('derniere_pos', 0)
@@ -870,7 +870,7 @@ _Aucune URL en perte détectée_
 """
             for _, row in df_gains_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
-                url = str(row.get('url', 'N/A'))[:60]
+                url = str(row.get('url', 'N/A'))
                 anc = row.get('ancienne_pos', 0)
                 anc = 0 if pd.isna(anc) else int(anc)
                 dern = row.get('derniere_pos', 0)
