@@ -171,11 +171,21 @@ if uploaded_leads:
     # Calculer les métriques leads sur les bonnes périodes
     leads_df = leads_df_raw.copy()
     
+    # S'assurer que les colonnes de mois sont numériques
+    for col in month_cols:
+        if col in leads_df.columns:
+            leads_df[col] = pd.to_numeric(leads_df[col], errors='coerce').fillna(0)
+    
     # Créer les noms de colonnes dynamiques basés sur la sélection
     periode_avant_label = '+'.join(periode_avant) if periode_avant else 'N/A'
     periode_apres_label = '+'.join(periode_apres) if periode_apres else 'N/A'
     
-    leads_df['leads_total'] = leads_df[month_cols].sum(axis=1)
+    # Calculer les totaux (seulement si on a des colonnes valides)
+    if month_cols:
+        leads_df['leads_total'] = leads_df[month_cols].sum(axis=1)
+    else:
+        leads_df['leads_total'] = 0
+        
     leads_df['leads_avant'] = leads_df[periode_avant].sum(axis=1) if periode_avant else 0
     leads_df['leads_apres'] = leads_df[periode_apres].sum(axis=1) if periode_apres else 0
     leads_df['leads_evolution'] = leads_df['leads_apres'] - leads_df['leads_avant']
