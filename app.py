@@ -1,6 +1,7 @@
 """
 Haloscan SEO Diff Analyzer
 Version corrigée pour le format exact du fichier Baptiste
+Avec intégration des données de leads par URL
 """
 
 import streamlit as st
@@ -60,6 +61,20 @@ def load_data(uploaded_file):
     
     return df
 
+
+def normalize_url(url):
+    """Normalise une URL pour la comparaison"""
+    if pd.isna(url):
+        return ""
+    url = str(url).lower().strip()
+    # Retirer le protocole
+    url = url.replace('https://', '').replace('http://', '')
+    # Retirer www.
+    url = url.replace('www.', '')
+    # Retirer le slash final
+    url = url.rstrip('/')
+    return url
+
 # =============================================================================
 # INTERFACE
 # =============================================================================
@@ -67,12 +82,87 @@ def load_data(uploaded_file):
 st.title("📊 Haloscan SEO Diff Analyzer")
 
 with st.sidebar:
-    st.header("📁 Import")
-    uploaded_file = st.file_uploader("Charger le CSV Haloscan", type=['csv'])
+    st.header("📁 Import des données")
+    
+    uploaded_file = st.file_uploader("1️⃣ CSV Haloscan (positions)", type=['csv'])
+    
+    uploaded_leads = st.file_uploader("2️⃣ Excel Leads par URL (optionnel)", type=['xlsx', 'xls'], 
+                                       help="Fichier avec colonnes: url, puis une colonne par mois (YYYY_MM)")
+
+# Variables globales pour les leads
+leads_df = None
+has_leads = False
+month_cols = []
+periode_avant = []
+periode_apres = []
+
+if uploaded_leads:
+    leads_df_raw = pd.read_excel(uploaded_leads)
+    
+    # Identifier les colonnes de mois
+    month_cols = [col for col in leads_df_raw.columns if col != 'url' and '_' in str(col)]
+    month_cols_sorted = sorted(month_cols)
+    
+    has_leads = True
+    
+    with st.sidebar:
+        st.subheader("📅 Périodes à comparer")
+        st.caption("Sélectionnez les mois correspondant à votre export Haloscan")
+        
+        # Période AVANT (ancienne position)
+        st.markdown("**Période AVANT** (ex: sept 2025)")
+        periode_avant = st.multiselect(
+            "Mois période avant",
+            options=month_cols_sorted,
+            default=[c for c in month_cols_sorted if c.startswith('2025_09')] or month_cols_sorted[-6:-3] if len(month_cols_sorted) >= 6 else month_cols_sorted[:3],
+            key="avant"
+        )
+        
+        # Période APRÈS (position actuelle)
+        st.markdown("**Période APRÈS** (ex: fév 2026)")
+        periode_apres = st.multiselect(
+            "Mois période après", 
+            options=month_cols_sorted,
+            default=[c for c in month_cols_sorted if c.startswith('2025_11') or c.startswith('2026')] or month_cols_sorted[-3:] if len(month_cols_sorted) >= 3 else month_cols_sorted[-1:],
+            key="apres"
+        )
+    
+    # Calculer les métriques leads sur les bonnes périodes
+    leads_df = leads_df_raw.copy()
+    
+    leads_df['leads_total'] = leads_df[month_cols].sum(axis=1)
+    leads_df['leads_avant'] = leads_df[periode_avant].sum(axis=1) if periode_avant else 0
+    leads_df['leads_apres'] = leads_df[periode_apres].sum(axis=1) if periode_apres else 0
+    leads_df['leads_evolution'] = leads_df['leads_apres'] - leads_df['leads_avant']
+    leads_df['leads_evolution_pct'] = ((leads_df['leads_apres'] - leads_df['leads_avant']) / leads_df['leads_avant'].replace(0, 1) * 100).round(1)
+    
+    leads_df['url_normalized'] = leads_df['url'].apply(normalize_url)
+    
+    st.sidebar.success(f"✅ {len(leads_df):,} URLs avec données leads")
+    if periode_avant and periode_apres:
+        st.sidebar.info(f"Avant: {', '.join(periode_avant)}\nAprès: {', '.join(periode_apres)}")
 
 if uploaded_file:
     df = load_data(uploaded_file)
-    st.success(f"✅ {len(df):,} mots-clés chargés")
+    
+    # Croiser avec les données leads si disponibles
+    if has_leads and 'url' in df.columns:
+        df['url_normalized'] = df['url'].apply(normalize_url)
+        df = df.merge(
+            leads_df[['url_normalized', 'leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'leads_evolution_pct']], 
+            on='url_normalized', 
+            how='left'
+        )
+        # Score de priorité enrichi : intègre les leads
+        df['priority_score_business'] = df['priority_score'] * (1 + df['leads_total'].fillna(0) / 100)
+        st.success(f"✅ {len(df):,} mots-clés chargés — Données leads croisées !")
+    else:
+        df['leads_total'] = 0
+        df['leads_avant'] = 0
+        df['leads_apres'] = 0
+        df['leads_evolution'] = 0
+        df['priority_score_business'] = df['priority_score']
+        st.success(f"✅ {len(df):,} mots-clés chargés")
     
     # Debug colonnes
     with st.sidebar:
@@ -157,9 +247,20 @@ if uploaded_file:
         
         st.divider()
         
-        c1, c2 = st.columns(2)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("📉 Volume perdu", f"{vol_perdu:,}")
         c2.metric("📈 Volume gagné", f"{vol_gagne:,}")
+        
+        # Métriques leads si disponibles
+        if has_leads:
+            # Leads sur les URLs en perte
+            urls_en_perte = df_f[df_f['diff_pos'] < 0]['url'].unique() if 'url' in df_f.columns else []
+            leads_urls_perte = df_f[df_f['url'].isin(urls_en_perte)]['leads_total'].fillna(0).sum()
+            c3.metric("⚠️ Leads sur URLs en perte", f"{int(leads_urls_perte):,}")
+            
+            leads_evol = df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum()
+            delta_color = "inverse" if leads_evol < 0 else "normal"
+            c4.metric("📊 Évol. leads (période)", f"{int(leads_evol):+,}", delta_color=delta_color)
         
         st.divider()
         
@@ -172,6 +273,19 @@ if uploaded_file:
         with col2:
             fig = px.histogram(df_f, x='diff_pos', nbins=50)
             st.plotly_chart(fig, use_container_width=True)
+        
+        # Top URLs impactées avec leads
+        if has_leads and 'url' in df_f.columns:
+            st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
+            df_perte_urls = df_f[df_f['diff_pos'] < 0].groupby('url').agg(
+                kw_perdus=('diff_pos', 'count'),
+                volume_perdu=('volume', 'sum'),
+                leads_total=('leads_total', 'first'),
+                leads_evolution=('leads_evolution', 'first'),
+                score=('priority_score_business', 'sum')
+            ).reset_index().sort_values('score', ascending=False).head(15)
+            
+            st.dataframe(df_perte_urls, use_container_width=True)
     
     # TAB 2: PERTES
     with tab2:
@@ -189,18 +303,33 @@ if uploaded_file:
     with tab3:
         st.header("📁 Analyse par URL")
         if 'url' in df_f.columns:
-            url_stats = df_f.groupby('url').agg(
-                total_kw=('diff_pos', 'count'),
-                kw_perte=('diff_pos', lambda x: (x < 0).sum()),
-                kw_gain=('diff_pos', lambda x: (x > 0).sum()),
-                diff_moyen=('diff_pos', 'mean'),
-                volume=('volume', 'sum') if 'volume' in df_f.columns else ('diff_pos', 'count'),
-                score=('priority_score', 'sum')
-            ).reset_index()
+            # Agrégation avec leads
+            agg_dict = {
+                'diff_pos': ['count', lambda x: (x < 0).sum(), lambda x: (x > 0).sum(), 'mean'],
+                'volume': 'sum',
+                'priority_score': 'sum',
+            }
+            if has_leads:
+                agg_dict['leads_total'] = 'first'
+                agg_dict['leads_avant'] = 'first'
+                agg_dict['leads_apres'] = 'first'
+                agg_dict['leads_evolution'] = 'first'
+                agg_dict['priority_score_business'] = 'sum'
+            
+            url_stats = df_f.groupby('url').agg(agg_dict).reset_index()
+            url_stats.columns = ['url', 'total_kw', 'kw_perte', 'kw_gain', 'diff_moyen', 'volume'] + \
+                               (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads else []) + \
+                               ['score']
+            
             url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
-            url_stats = url_stats.sort_values('score', ascending=False)
+            
+            # Tri par score business si dispo, sinon score normal
+            sort_col = 'score_business' if has_leads else 'score'
+            url_stats = url_stats.sort_values(sort_col, ascending=False)
             
             st.info(f"**{len(url_stats):,}** URLs analysées — Affichage complet")
+            
+            # Afficher avec mise en forme conditionnelle
             st.dataframe(url_stats, use_container_width=True, height=500)
             
             # Export complet
@@ -221,6 +350,18 @@ if uploaded_file:
                 c3.metric("En gain", len(df_url[df_url['diff_pos'] > 0]))
                 if 'volume' in df_url.columns:
                     c4.metric("Volume total", f"{int(df_url['volume'].fillna(0).sum()):,}")
+                
+                # Afficher les leads si dispo
+                if has_leads and 'leads_total' in df_url.columns:
+                    c1, c2, c3, c4 = st.columns(4)
+                    leads_t = df_url['leads_total'].iloc[0] if len(df_url) > 0 else 0
+                    leads_av = df_url['leads_avant'].iloc[0] if len(df_url) > 0 else 0
+                    leads_ap = df_url['leads_apres'].iloc[0] if len(df_url) > 0 else 0
+                    leads_e = df_url['leads_evolution'].iloc[0] if len(df_url) > 0 else 0
+                    c1.metric("📊 Leads total", f"{int(leads_t or 0):,}")
+                    c2.metric("📊 Leads AVANT", f"{int(leads_av or 0):,}")
+                    c3.metric("📊 Leads APRÈS", f"{int(leads_ap or 0):,}")
+                    c4.metric("📈 Évolution", f"{int(leads_e or 0):+,}")
                 
                 cols = [c for c in ['mot_cle', 'diff_pos', 'volume', 'derniere_pos', 'ancienne_pos', 'meilleure_pos'] if c in df_url.columns]
                 st.dataframe(df_url[cols].sort_values('diff_pos'), use_container_width=True)
@@ -250,17 +391,36 @@ if uploaded_file:
         if st.button("🔄 Générer le rapport complet", type="primary"):
             
             # Calculs pour le rapport
-            df_pertes_rapport = df_f[df_f['diff_pos'] < 0].sort_values('priority_score', ascending=False)
+            df_pertes_rapport = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads else 'priority_score', ascending=False)
             df_gains_rapport = df_f[df_f['diff_pos'] > 0].sort_values('priority_score', ascending=False)
             
             # URLs les plus impactées
             if 'url' in df_f.columns:
-                urls_critiques = df_pertes_rapport.groupby('url').agg(
-                    nb_kw_perdus=('diff_pos', 'count'),
-                    volume_impacte=('volume', 'sum') if 'volume' in df_f.columns else ('diff_pos', 'count'),
-                    diff_moyen=('diff_pos', 'mean'),
-                    score_total=('priority_score', 'sum')
-                ).reset_index().sort_values('score_total', ascending=False)
+                agg_url = {
+                    'diff_pos': 'count',
+                    'volume': 'sum',
+                    'priority_score': 'sum',
+                }
+                if has_leads:
+                    agg_url['leads_total'] = 'first'
+                    agg_url['leads_avant'] = 'first'
+                    agg_url['leads_apres'] = 'first'
+                    agg_url['leads_evolution'] = 'first'
+                    agg_url['priority_score_business'] = 'sum'
+                
+                urls_critiques = df_pertes_rapport.groupby('url').agg(agg_url).reset_index()
+                urls_critiques.columns = ['url', 'nb_kw_perdus', 'volume_impacte', 'score_seo'] + \
+                                        (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads else [])
+                
+                sort_col = 'score_business' if has_leads else 'score_seo'
+                urls_critiques = urls_critiques.sort_values(sort_col, ascending=False)
+            
+            # Calcul impact leads
+            if has_leads:
+                total_leads_perte = int(df_pertes_rapport['leads_total'].fillna(0).sum())
+                total_leads_avant_perte = int(df_pertes_rapport['leads_avant'].fillna(0).sum())
+                total_leads_apres_perte = int(df_pertes_rapport['leads_apres'].fillna(0).sum())
+                leads_evolution_total = int(df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum())
             
             report = f"""# 📊 RAPPORT D'ANALYSE SEO COMPLET
 ## Période : Septembre 2025 → Février 2026
@@ -279,8 +439,27 @@ if uploaded_file:
 | **Volume de recherche perdu** | {vol_perdu:,} /mois |
 | **Volume de recherche gagné** | {vol_gagne:,} /mois |
 | **Bilan net volume** | {vol_gagne - vol_perdu:+,} /mois |
+"""
+            
+            if has_leads:
+                periodes_info = f"Période AVANT: {', '.join(periode_avant) if periode_avant else 'N/A'} | Période APRÈS: {', '.join(periode_apres) if periode_apres else 'N/A'}"
+                report += f"""
+## 💰 IMPACT BUSINESS (Leads)
 
----
+**{periodes_info}**
+
+| Métrique | Valeur |
+|----------|--------|
+| **Leads historiques sur URLs en perte** | {total_leads_perte:,} |
+| **Leads période AVANT** | {total_leads_avant_perte:,} |
+| **Leads période APRÈS** | {total_leads_apres_perte:,} |
+| **Évolution des leads** | {leads_evolution_total:+,} |
+
+⚠️ **Ces URLs génèrent des leads et perdent en visibilité SEO = PRIORITÉ MAXIMALE**
+
+"""
+
+            report += """---
 
 # 2. DIAGNOSTIC
 
@@ -301,16 +480,28 @@ if uploaded_file:
 
 # 3. TOUTES LES PAGES À TRAITER ({len(urls_critiques):,} URLs)
 
-Ces URLs sont triées par score de priorité (volume × chute de position).
-**L'équipe édito doit traiter ces pages dans l'ordre.**
-
-| Priorité | URL | KW perdus | Volume impacté | Diff moyen | Score |
-|----------|-----|-----------|----------------|------------|-------|
 """
-            if 'url' in df_f.columns:
+            if has_leads:
+                report += """**Triées par SCORE BUSINESS (SEO × Leads)** — Les URLs avec pertes SEO ET leads historiques sont en priorité maximale.
+
+| Priorité | URL | KW perdus | Volume | Leads total | Leads avant | Leads après | Évol. | Score |
+|----------|-----|-----------|--------|-------------|-------------|-------------|-------|-------|
+"""
                 for i, row in urls_critiques.iterrows():
-                    prio = "🔴 URGENT" if row['score_total'] > urls_critiques['score_total'].quantile(0.9) else "🟠 MOYEN" if row['score_total'] > urls_critiques['score_total'].quantile(0.5) else "🟡 FAIBLE"
-                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {row['diff_moyen']:.1f} | {int(row['score_total']):,} |\n"
+                    score = row.get('score_business', row.get('score_seo', 0))
+                    prio = "🔴 CRITIQUE" if row.get('leads_total', 0) > 100 and row['nb_kw_perdus'] > 5 else \
+                           "🟠 URGENT" if score > urls_critiques[sort_col].quantile(0.9) else \
+                           "🟡 MOYEN" if score > urls_critiques[sort_col].quantile(0.5) else "⚪ FAIBLE"
+                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {int(row.get('leads_total', 0) or 0):,} | {int(row.get('leads_avant', 0) or 0):,} | {int(row.get('leads_apres', 0) or 0):,} | {int(row.get('leads_evolution', 0) or 0):+,} | {int(score):,} |\n"
+            else:
+                report += """**Triées par score de priorité (volume × perte)**
+
+| Priorité | URL | KW perdus | Volume impacté | Score |
+|----------|-----|-----------|----------------|-------|
+"""
+                for i, row in urls_critiques.iterrows():
+                    prio = "🔴 URGENT" if row['score_seo'] > urls_critiques['score_seo'].quantile(0.9) else "🟠 MOYEN" if row['score_seo'] > urls_critiques['score_seo'].quantile(0.5) else "🟡 FAIBLE"
+                    report += f"| {prio} | {row['url']} | {int(row['nb_kw_perdus'])} | {int(row.get('volume_impacte', 0)):,} | {int(row['score_seo']):,} |\n"
 
             report += f"""
 
@@ -318,10 +509,15 @@ Ces URLs sont triées par score de priorité (volume × chute de position).
 
 # 4. MOTS-CLÉS EN PERTE — LISTE COMPLÈTE ({len(df_pertes_rapport):,} KW)
 
-**Triés par score de priorité (volume × perte de position)**
+**Triés par score de priorité"""
+            
+            if has_leads:
+                report += " (intégrant l'impact business)"
+            
+            report += """
 
-| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume | Score priorité |
-|---------|-----|--------------|--------------|------|--------|----------------|
+| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume | Score |
+|---------|-----|--------------|--------------|------|--------|-------|
 """
             for _, row in df_pertes_rapport.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
@@ -330,7 +526,7 @@ Ces URLs sont triées par score de priorité (volume × chute de position).
                 dern = int(row.get('derniere_pos', 0) or 0)
                 diff = int(row.get('diff_pos', 0) or 0)
                 vol = int(row.get('volume', 0) or 0)
-                score = int(row.get('priority_score', 0) or 0)
+                score = int(row.get('priority_score_business' if has_leads else 'priority_score', 0) or 0)
                 report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} | {score:,} |\n"
 
             report += f"""
@@ -359,17 +555,26 @@ Ces URLs sont triées par score de priorité (volume × chute de position).
 
 # 6. RECOMMANDATIONS POUR L'ÉQUIPE ÉDITO
 
-## Actions immédiates (cette semaine)
-1. **Auditer les 10 premières URLs critiques** — Vérifier : contenu à jour ? maillage interne ? balises optimisées ?
+## 🔴 Actions immédiates (cette semaine)
+"""
+            if has_leads:
+                report += """1. **PRIORITÉ ABSOLUE : URLs avec leads + pertes SEO** — Ces pages génèrent du business ET perdent en visibilité
+2. **Auditer le contenu** des 10 premières URLs critiques
+3. **Vérifier le maillage interne** vers ces pages stratégiques
+"""
+            else:
+                report += """1. **Auditer les 10 premières URLs critiques** — Vérifier : contenu à jour ? maillage interne ? balises optimisées ?
 2. **Identifier les KW à fort volume perdus** — Filtrer les pertes avec volume > 1000
 3. **Vérifier la concurrence** — Les concurrents ont-ils amélioré leur contenu ?
+"""
 
-## Actions court terme (ce mois)
+            report += """
+## 🟠 Actions court terme (ce mois)
 1. **Mettre à jour les contenus des pages critiques** — Enrichir, actualiser, ajouter des sections
 2. **Renforcer le maillage interne** vers les pages en perte
 3. **Créer du contenu de support** pour les thématiques en baisse
 
-## Actions moyen terme (ce trimestre)
+## 🟡 Actions moyen terme (ce trimestre)
 1. **Audit technique** — Vérifier Core Web Vitals des pages impactées
 2. **Analyse des backlinks** — Les pages ont-elles perdu des liens ?
 3. **Stratégie de contenu** — Planifier les mises à jour récurrentes
@@ -382,12 +587,22 @@ Refaire cette analyse dans 1 mois pour mesurer :
 - [ ] Réduction du nombre de KW en perte
 - [ ] Récupération des positions sur les KW prioritaires
 - [ ] Amélioration du volume de recherche capté
+"""
+            if has_leads:
+                report += """- [ ] Stabilisation ou hausse des leads sur les URLs retravaillées
+"""
 
+            report += f"""
 ---
 
 _Rapport généré automatiquement — Haloscan SEO Diff Analyzer_
-_Données : {len(df):,} mots-clés analysés_
-"""
+_Données : {len(df):,} mots-clés analysés"""
+            
+            if has_leads:
+                report += f" | {len(leads_df):,} URLs avec données leads"
+            
+            report += "_\n"
+            
             st.session_state['report'] = report
             st.success("✅ Rapport généré !")
         
@@ -406,8 +621,8 @@ _Données : {len(df):,} mots-clés analysés_
                 )
             with col2:
                 # Export aussi en CSV les données brutes
-                df_export = df_f[df_f['diff_pos'] < 0].sort_values('priority_score', ascending=False)
-                cols_export = [c for c in ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'priority_score'] if c in df_export.columns]
+                df_export = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads else 'priority_score', ascending=False)
+                cols_export = [c for c in ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'priority_score', 'priority_score_business'] if c in df_export.columns]
                 csv_export = df_export[cols_export].to_csv(index=False, sep=';').encode('utf-8')
                 st.download_button(
                     "📥 Télécharger les données (CSV)",
