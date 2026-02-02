@@ -172,12 +172,13 @@ def generate_report(df, df_filtered, kpis):
     # Top pertes
     top_pertes = df_filtered[df_filtered['diff_pos'] < 0].nlargest(10, 'priority_score')
     
-    # KW sortis
-    if 'statut' in df_filtered.columns:
-        statut_str = df_filtered['statut'].astype(str).str.lower()
-        kw_sortis = df_filtered[statut_str.str.contains('sort|out', na=False)].nlargest(10, 'volume')
+    # KW sortis (position > 100 ou disparu)
+    if 'derniere_pos' in df_filtered.columns:
+        kw_sortis = df_filtered[(df_filtered['derniere_pos'] > 100) | (df_filtered['derniere_pos'].isna())]
+        if 'volume' in kw_sortis.columns and len(kw_sortis) > 0:
+            kw_sortis = kw_sortis.nlargest(10, 'volume')
     else:
-        kw_sortis = df_filtered[df_filtered['derniere_pos'] > 100].nlargest(10, 'volume') if 'derniere_pos' in df_filtered.columns else pd.DataFrame()
+        kw_sortis = pd.DataFrame()
     
     report = f"""# Rapport d'Analyse SEO — {datetime.now().strftime('%d/%m/%Y')}
 
@@ -322,16 +323,12 @@ if uploaded_file:
     with st.sidebar:
         st.header("🎛️ Filtres")
         
-        # Filtre par statut
-        if 'statut' in df.columns:
-            statuts_disponibles = df['statut'].astype(str).dropna().unique().tolist()
-            statuts_selectionnes = st.multiselect(
-                "Statut",
-                options=statuts_disponibles,
-                default=statuts_disponibles
-            )
-        else:
-            statuts_selectionnes = None
+        # Filtre par type de variation
+        variation_filter = st.multiselect(
+            "Type de variation",
+            options=['Pertes', 'Gains', 'Stables'],
+            default=['Pertes', 'Gains', 'Stables']
+        )
         
         # Filtre par volume
         if 'volume' in df.columns:
@@ -373,8 +370,20 @@ if uploaded_file:
     # Application des filtres
     df_filtered = df.copy()
     
-    if statuts_selectionnes is not None and 'statut' in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered['statut'].isin(statuts_selectionnes)]
+    # Filtre par type de variation
+    if 'diff_pos' in df_filtered.columns:
+        conditions = []
+        if 'Pertes' in variation_filter:
+            conditions.append(df_filtered['diff_pos'] < 0)
+        if 'Gains' in variation_filter:
+            conditions.append(df_filtered['diff_pos'] > 0)
+        if 'Stables' in variation_filter:
+            conditions.append(df_filtered['diff_pos'] == 0)
+        if conditions:
+            combined_condition = conditions[0]
+            for cond in conditions[1:]:
+                combined_condition = combined_condition | cond
+            df_filtered = df_filtered[combined_condition]
     
     if volume_range and 'volume' in df_filtered.columns:
         df_filtered = df_filtered[
@@ -412,19 +421,16 @@ if uploaded_file:
     
     total_kw = len(df_filtered)
     
-    # Détection des pertes/gains selon la colonne disponible
-    if 'statut' in df_filtered.columns:
-        # Conversion en string pour éviter les erreurs sur colonnes mixtes
-        statut_str = df_filtered['statut'].astype(str).str.lower()
-        pertes = len(df_filtered[statut_str.str.contains('perd|lost|down', na=False)])
-        gains = len(df_filtered[statut_str.str.contains('gagn|gain|up', na=False)])
-        stables = len(df_filtered[statut_str.str.contains('stable', na=False)])
-        sortis = len(df_filtered[statut_str.str.contains('sort|out', na=False)])
-    elif 'diff_pos' in df_filtered.columns:
+    # Détection des pertes/gains basée sur diff_pos (plus fiable que statut)
+    if 'diff_pos' in df_filtered.columns:
         pertes = len(df_filtered[df_filtered['diff_pos'] < 0])
         gains = len(df_filtered[df_filtered['diff_pos'] > 0])
         stables = len(df_filtered[df_filtered['diff_pos'] == 0])
-        sortis = len(df_filtered[df_filtered['derniere_pos'] > 100]) if 'derniere_pos' in df_filtered.columns else 0
+        # Sortis = position actuelle > 100 ou vide/NaN
+        if 'derniere_pos' in df_filtered.columns:
+            sortis = len(df_filtered[(df_filtered['derniere_pos'] > 100) | (df_filtered['derniere_pos'].isna())])
+        else:
+            sortis = 0
     else:
         pertes = gains = stables = sortis = 0
     
@@ -512,22 +518,13 @@ if uploaded_file:
         
         with col1:
             st.subheader("Répartition par statut")
-            if 'statut' in df_filtered.columns:
-                statut_counts = df_filtered['statut'].astype(str).value_counts()
-                fig_pie = px.pie(
-                    values=statut_counts.values,
-                    names=statut_counts.index,
-                    color_discrete_sequence=px.colors.qualitative.Set2
-                )
-                fig_pie.update_layout(height=350)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                # Pie chart basé sur diff_pos
-                labels = ['Pertes', 'Gains', 'Stables']
-                values = [pertes, gains, stables]
-                fig_pie = px.pie(values=values, names=labels, color_discrete_sequence=['#EF4444', '#22C55E', '#6B7280'])
-                fig_pie.update_layout(height=350)
-                st.plotly_chart(fig_pie, use_container_width=True)
+            # Pie chart basé sur diff_pos (pertes/gains/stables)
+            labels = ['Pertes', 'Gains', 'Stables', 'Sortis']
+            values = [pertes, gains, stables, sortis]
+            colors = ['#EF4444', '#22C55E', '#6B7280', '#F97316']
+            fig_pie = px.pie(values=values, names=labels, color_discrete_sequence=colors)
+            fig_pie.update_layout(height=350)
+            st.plotly_chart(fig_pie, use_container_width=True)
         
         with col2:
             st.subheader("Distribution des différentiels")
@@ -698,11 +695,9 @@ if uploaded_file:
     with tab5:
         st.header("❌ Mots-clés sortis des SERPs")
         
-        if 'statut' in df_filtered.columns:
-            statut_str = df_filtered['statut'].astype(str).str.lower()
-            df_sortis = df_filtered[statut_str.str.contains('sort|out', na=False)]
-        elif 'derniere_pos' in df_filtered.columns:
-            df_sortis = df_filtered[df_filtered['derniere_pos'] > 100]
+        # Sortis = dernière position > 100 ou NaN (disparu des SERPs)
+        if 'derniere_pos' in df_filtered.columns:
+            df_sortis = df_filtered[(df_filtered['derniere_pos'] > 100) | (df_filtered['derniere_pos'].isna())]
         else:
             df_sortis = pd.DataFrame()
         
