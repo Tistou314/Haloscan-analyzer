@@ -165,13 +165,17 @@ if uploaded_file:
         # Score de priorité enrichi : intègre les leads
         df['priority_score_business'] = df['priority_score'] * (1 + df['leads_total'].fillna(0) / 100)
         st.success(f"✅ {len(df):,} mots-clés chargés — Données leads croisées !")
+        has_leads_merged = True
     else:
         df['leads_total'] = 0
         df['leads_avant'] = 0
         df['leads_apres'] = 0
         df['leads_evolution'] = 0
         df['priority_score_business'] = df['priority_score']
+        if has_leads_merged:
+            st.warning("⚠️ Fichier leads chargé mais colonne 'url' manquante dans le CSV Haloscan")
         st.success(f"✅ {len(df):,} mots-clés chargés")
+        has_leads_merged = False
     
     # Debug colonnes
     with st.sidebar:
@@ -261,7 +265,7 @@ if uploaded_file:
         c2.metric("📈 Volume gagné", f"{vol_gagne:,}")
         
         # Métriques leads si disponibles
-        if has_leads:
+        if has_leads_merged:
             # Leads sur les URLs en perte
             urls_en_perte = df_f[df_f['diff_pos'] < 0]['url'].unique() if 'url' in df_f.columns else []
             leads_urls_perte = df_f[df_f['url'].isin(urls_en_perte)]['leads_total'].fillna(0).sum()
@@ -284,7 +288,7 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
         
         # Top URLs impactées avec leads
-        if has_leads and 'url' in df_f.columns:
+        if has_leads_merged:
             st.subheader("🎯 URLs critiques : Pertes SEO + Impact Business")
             df_perte_urls = df_f[df_f['diff_pos'] < 0].groupby('url').agg(
                 kw_perdus=('diff_pos', 'count'),
@@ -318,7 +322,7 @@ if uploaded_file:
                 'volume': 'sum',
                 'priority_score': 'sum',
             }
-            if has_leads:
+            if has_leads_merged:
                 agg_dict['leads_total'] = 'first'
                 agg_dict['leads_avant'] = 'first'
                 agg_dict['leads_apres'] = 'first'
@@ -327,13 +331,13 @@ if uploaded_file:
             
             url_stats = df_f.groupby('url').agg(agg_dict).reset_index()
             url_stats.columns = ['url', 'total_kw', 'kw_perte', 'kw_gain', 'diff_moyen', 'volume'] + \
-                               (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads else []) + \
+                               (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads_merged else []) + \
                                ['score']
             
             url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_perte']) / url_stats['total_kw'] * 100).round(1)
             
             # Tri par score business si dispo, sinon score normal
-            sort_col = 'score_business' if has_leads else 'score'
+            sort_col = 'score_business' if has_leads_merged else 'score'
             url_stats = url_stats.sort_values(sort_col, ascending=False)
             
             st.info(f"**{len(url_stats):,}** URLs analysées — Affichage complet")
@@ -361,7 +365,7 @@ if uploaded_file:
                     c4.metric("Volume total", f"{int(df_url['volume'].fillna(0).sum()):,}")
                 
                 # Afficher les leads si dispo
-                if has_leads and 'leads_total' in df_url.columns:
+                if has_leads_merged and 'leads_total' in df_url.columns:
                     c1, c2, c3, c4 = st.columns(4)
                     leads_t = df_url['leads_total'].iloc[0] if len(df_url) > 0 else 0
                     leads_av = df_url['leads_avant'].iloc[0] if len(df_url) > 0 else 0
@@ -400,7 +404,7 @@ if uploaded_file:
         if st.button("🔄 Générer le rapport complet", type="primary"):
             
             # Calculs pour le rapport
-            df_pertes_rapport = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads else 'priority_score', ascending=False)
+            df_pertes_rapport = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads_merged else 'priority_score', ascending=False)
             df_gains_rapport = df_f[df_f['diff_pos'] > 0].sort_values('priority_score', ascending=False)
             
             # URLs les plus impactées
@@ -410,7 +414,7 @@ if uploaded_file:
                     'volume': 'sum',
                     'priority_score': 'sum',
                 }
-                if has_leads:
+                if has_leads_merged:
                     agg_url['leads_total'] = 'first'
                     agg_url['leads_avant'] = 'first'
                     agg_url['leads_apres'] = 'first'
@@ -419,13 +423,13 @@ if uploaded_file:
                 
                 urls_critiques = df_pertes_rapport.groupby('url').agg(agg_url).reset_index()
                 urls_critiques.columns = ['url', 'nb_kw_perdus', 'volume_impacte', 'score_seo'] + \
-                                        (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads else [])
+                                        (['leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'score_business'] if has_leads_merged else [])
                 
-                sort_col = 'score_business' if has_leads else 'score_seo'
+                sort_col = 'score_business' if has_leads_merged else 'score_seo'
                 urls_critiques = urls_critiques.sort_values(sort_col, ascending=False)
             
             # Calcul impact leads
-            if has_leads:
+            if has_leads_merged:
                 total_leads_perte = int(df_pertes_rapport['leads_total'].fillna(0).sum())
                 total_leads_avant_perte = int(df_pertes_rapport['leads_avant'].fillna(0).sum())
                 total_leads_apres_perte = int(df_pertes_rapport['leads_apres'].fillna(0).sum())
@@ -450,7 +454,7 @@ if uploaded_file:
 | **Bilan net volume** | {vol_gagne - vol_perdu:+,} /mois |
 """
             
-            if has_leads:
+            if has_leads_merged:
                 periodes_info = f"Période AVANT: {', '.join(periode_avant) if periode_avant else 'N/A'} | Période APRÈS: {', '.join(periode_apres) if periode_apres else 'N/A'}"
                 report += f"""
 ## 💰 IMPACT BUSINESS (Leads)
@@ -490,7 +494,7 @@ if uploaded_file:
 # 3. TOUTES LES PAGES À TRAITER ({len(urls_critiques):,} URLs)
 
 """
-            if has_leads:
+            if has_leads_merged:
                 report += """**Triées par SCORE BUSINESS (SEO × Leads)** — Les URLs avec pertes SEO ET leads historiques sont en priorité maximale.
 
 | Priorité | URL | KW perdus | Volume | Leads total | Leads avant | Leads après | Évol. | Score |
@@ -520,7 +524,7 @@ if uploaded_file:
 
 **Triés par score de priorité"""
             
-            if has_leads:
+            if has_leads_merged:
                 report += " (intégrant l'impact business)"
             
             report += """
@@ -535,7 +539,7 @@ if uploaded_file:
                 dern = int(row.get('derniere_pos', 0) or 0)
                 diff = int(row.get('diff_pos', 0) or 0)
                 vol = int(row.get('volume', 0) or 0)
-                score = int(row.get('priority_score_business' if has_leads else 'priority_score', 0) or 0)
+                score = int(row.get('priority_score_business' if has_leads_merged else 'priority_score', 0) or 0)
                 report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} | {score:,} |\n"
 
             report += f"""
@@ -566,7 +570,7 @@ if uploaded_file:
 
 ## 🔴 Actions immédiates (cette semaine)
 """
-            if has_leads:
+            if has_leads_merged:
                 report += """1. **PRIORITÉ ABSOLUE : URLs avec leads + pertes SEO** — Ces pages génèrent du business ET perdent en visibilité
 2. **Auditer le contenu** des 10 premières URLs critiques
 3. **Vérifier le maillage interne** vers ces pages stratégiques
@@ -597,7 +601,7 @@ Refaire cette analyse dans 1 mois pour mesurer :
 - [ ] Récupération des positions sur les KW prioritaires
 - [ ] Amélioration du volume de recherche capté
 """
-            if has_leads:
+            if has_leads_merged:
                 report += """- [ ] Stabilisation ou hausse des leads sur les URLs retravaillées
 """
 
@@ -607,7 +611,7 @@ Refaire cette analyse dans 1 mois pour mesurer :
 _Rapport généré automatiquement — Haloscan SEO Diff Analyzer_
 _Données : {len(df):,} mots-clés analysés"""
             
-            if has_leads:
+            if has_leads_merged:
                 report += f" | {len(leads_df):,} URLs avec données leads"
             
             report += "_\n"
@@ -630,7 +634,7 @@ _Données : {len(df):,} mots-clés analysés"""
                 )
             with col2:
                 # Export aussi en CSV les données brutes
-                df_export = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads else 'priority_score', ascending=False)
+                df_export = df_f[df_f['diff_pos'] < 0].sort_values('priority_score_business' if has_leads_merged else 'priority_score', ascending=False)
                 cols_export = [c for c in ['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume', 'leads_total', 'leads_avant', 'leads_apres', 'leads_evolution', 'priority_score', 'priority_score_business'] if c in df_export.columns]
                 csv_export = df_export[cols_export].to_csv(index=False, sep=';').encode('utf-8')
                 st.download_button(
