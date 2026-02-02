@@ -156,12 +156,20 @@ def generate_report(df, df_filtered, kpis):
     """Génère le rapport textuel pour l'équipe contenu"""
     
     # Top 5 URLs impactées
-    if 'url' in df_filtered.columns:
-        url_impact = df_filtered[df_filtered['diff_pos'] < 0].groupby('url').agg({
-            'mot_cle': 'count',
-            'volume': 'sum',
-            'trafic': 'sum'
-        }).sort_values('volume', ascending=False).head(5)
+    if 'url' in df_filtered.columns and 'diff_pos' in df_filtered.columns:
+        df_pertes = df_filtered[df_filtered['diff_pos'] < 0].copy()
+        agg_dict = {'mot_cle': 'count'}
+        if 'volume' in df_pertes.columns:
+            df_pertes['volume'] = df_pertes['volume'].fillna(0)
+            agg_dict['volume'] = 'sum'
+        if 'trafic' in df_pertes.columns:
+            df_pertes['trafic'] = df_pertes['trafic'].fillna(0)
+            agg_dict['trafic'] = 'sum'
+        url_impact = df_pertes.groupby('url').agg(agg_dict)
+        if 'volume' in url_impact.columns:
+            url_impact = url_impact.sort_values('volume', ascending=False).head(5)
+        else:
+            url_impact = url_impact.sort_values('mot_cle', ascending=False).head(5)
     else:
         url_impact = pd.DataFrame()
     
@@ -546,9 +554,11 @@ if uploaded_file:
                 st.plotly_chart(fig_hist, use_container_width=True)
         
         # Top URLs impactées
-        if 'url' in df_filtered.columns and 'volume' in df_filtered.columns:
+        if 'url' in df_filtered.columns and 'volume' in df_filtered.columns and 'diff_pos' in df_filtered.columns:
             st.subheader("Top 10 URLs les plus impactées (en volume perdu)")
-            url_impact = df_filtered[df_filtered['diff_pos'] < 0].groupby('url').agg({
+            df_pertes_dash = df_filtered[df_filtered['diff_pos'] < 0].copy()
+            df_pertes_dash['volume'] = df_pertes_dash['volume'].fillna(0)
+            url_impact = df_pertes_dash.groupby('url').agg({
                 'mot_cle': 'count',
                 'volume': 'sum'
             }).rename(columns={'mot_cle': 'nb_kw_perdus', 'volume': 'volume_impacte'})
@@ -603,26 +613,54 @@ if uploaded_file:
         st.header("📁 Analyse par URL")
         
         if 'url' in df_filtered.columns:
-            # Agrégation par URL
-            url_stats = df_filtered.groupby('url').agg({
-                'mot_cle': 'count',
-                'diff_pos': ['sum', 'mean'],
-                'volume': 'sum',
-                'trafic': 'sum',
-                'priority_score': 'sum'
-            }).reset_index()
+            # Préparer les données avec fillna
+            df_url_analysis = df_filtered.copy()
+            if 'volume' in df_url_analysis.columns:
+                df_url_analysis['volume'] = df_url_analysis['volume'].fillna(0)
+            if 'trafic' in df_url_analysis.columns:
+                df_url_analysis['trafic'] = df_url_analysis['trafic'].fillna(0)
+            if 'priority_score' in df_url_analysis.columns:
+                df_url_analysis['priority_score'] = df_url_analysis['priority_score'].fillna(0)
             
-            url_stats.columns = ['url', 'total_kw', 'diff_total', 'diff_moyen', 'volume_total', 'trafic_total', 'score_priorite']
+            # Construire l'agrégation dynamiquement selon les colonnes disponibles
+            agg_dict = {'mot_cle': 'count'}
+            if 'diff_pos' in df_url_analysis.columns:
+                agg_dict['diff_pos'] = ['sum', 'mean']
+            if 'volume' in df_url_analysis.columns:
+                agg_dict['volume'] = 'sum'
+            if 'trafic' in df_url_analysis.columns:
+                agg_dict['trafic'] = 'sum'
+            if 'priority_score' in df_url_analysis.columns:
+                agg_dict['priority_score'] = 'sum'
+            
+            url_stats = df_url_analysis.groupby('url').agg(agg_dict).reset_index()
+            
+            # Renommer les colonnes de manière dynamique
+            new_cols = ['url', 'total_kw']
+            if 'diff_pos' in agg_dict:
+                new_cols.extend(['diff_total', 'diff_moyen'])
+            if 'volume' in agg_dict:
+                new_cols.append('volume_total')
+            if 'trafic' in agg_dict:
+                new_cols.append('trafic_total')
+            if 'priority_score' in agg_dict:
+                new_cols.append('score_priorite')
+            url_stats.columns = new_cols
             
             # KW en perte par URL
-            pertes_par_url = df_filtered[df_filtered['diff_pos'] < 0].groupby('url').size().reset_index(name='kw_en_perte')
-            url_stats = url_stats.merge(pertes_par_url, on='url', how='left')
-            url_stats['kw_en_perte'] = url_stats['kw_en_perte'].fillna(0).astype(int)
+            if 'diff_pos' in df_url_analysis.columns:
+                pertes_par_url = df_url_analysis[df_url_analysis['diff_pos'] < 0].groupby('url').size().reset_index(name='kw_en_perte')
+                url_stats = url_stats.merge(pertes_par_url, on='url', how='left')
+                url_stats['kw_en_perte'] = url_stats['kw_en_perte'].fillna(0).astype(int)
+                
+                # Score de santé
+                url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_en_perte']) / url_stats['total_kw'] * 100).round(1)
             
-            # Score de santé
-            url_stats['sante_pct'] = ((url_stats['total_kw'] - url_stats['kw_en_perte']) / url_stats['total_kw'] * 100).round(1)
-            
-            url_stats = url_stats.sort_values('score_priorite', ascending=False)
+            # Tri par score ou par nombre de KW
+            if 'score_priorite' in url_stats.columns:
+                url_stats = url_stats.sort_values('score_priorite', ascending=False)
+            else:
+                url_stats = url_stats.sort_values('total_kw', ascending=False)
             
             st.info(f"**{len(url_stats):,}** URLs analysées")
             
