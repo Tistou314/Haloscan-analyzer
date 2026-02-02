@@ -806,27 +806,43 @@ _Aucune URL en perte détectée_
             # Priorité : diff très négative + volume élevé
             df_pertes_critiques = df_pertes_rapport[df_pertes_rapport['diff_pos'] <= -5].copy()
             
-            # Trier par diff_pos (les pires en premier), puis par volume
-            if 'volume' in df_pertes_critiques.columns:
-                df_pertes_critiques = df_pertes_critiques.sort_values(
-                    ['diff_pos', 'volume'], 
-                    ascending=[True, False]
-                )
+            # Grouper par URL et garder le KW principal :
+            # = celui avec le plus gros volume PARMI ceux où l'URL rankait bien avant (ancienne_pos ≤ 10)
+            if 'volume' in df_pertes_critiques.columns and 'url' in df_pertes_critiques.columns:
+                # Filtrer les KW où l'URL rankait vraiment bien (top 10)
+                df_bien_ranke = df_pertes_critiques[df_pertes_critiques['ancienne_pos'] <= 10].copy()
+                
+                # Si pas de KW bien ranké pour une URL, on prend quand même le meilleur volume
+                if len(df_bien_ranke) > 0:
+                    idx_kw_principal = df_bien_ranke.groupby('url')['volume'].idxmax()
+                    df_pertes_par_url = df_bien_ranke.loc[idx_kw_principal].copy()
+                else:
+                    idx_kw_principal = df_pertes_critiques.groupby('url')['volume'].idxmax()
+                    df_pertes_par_url = df_pertes_critiques.loc[idx_kw_principal].copy()
+                
+                # Ajouter le nombre total de KW perdus par URL (tous les KW, pas que les bien rankés)
+                kw_count = df_pertes_critiques.groupby('url').size().rename('nb_kw_perdus')
+                df_pertes_par_url = df_pertes_par_url.merge(kw_count, on='url', how='left')
+                
+                # Trier par diff_pos (les pires en premier)
+                df_pertes_par_url = df_pertes_par_url.sort_values('diff_pos', ascending=True)
+            else:
+                df_pertes_par_url = df_pertes_critiques.sort_values('diff_pos', ascending=True)
             
-            # Limiter à 500 KW max
+            # Limiter à 500 URLs max
             max_kw_rapport = 500
-            df_pertes_limited = df_pertes_critiques.head(max_kw_rapport)
+            df_pertes_limited = df_pertes_par_url.head(max_kw_rapport)
             
             report += f"""
 
 ---
 
-# 4. PERTES CRITIQUES — TOP {len(df_pertes_limited):,} (pertes ≥ 5 positions)
+# 4. PERTES CRITIQUES — TOP {len(df_pertes_limited):,} URLs (pertes ≥ 5 positions)
 
-**⚠️ Priorité maximale : KW avec fortes pertes de positions**
+**⚠️ Priorité maximale — KW principal = plus gros volume parmi ceux où l'URL était en top 10**
 
-| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume |
-|---------|-----|--------------|--------------|------|--------|
+| KW Principal | URL | Ancienne pos | Nouvelle pos | Diff | Volume | Nb KW perdus |
+|--------------|-----|--------------|--------------|------|--------|--------------|
 """
             for _, row in df_pertes_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
@@ -839,34 +855,50 @@ _Aucune URL en perte détectée_
                 diff = 0 if pd.isna(diff) else int(diff)
                 vol = row.get('volume', 0)
                 vol = 0 if pd.isna(vol) else int(vol)
-                report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} |\n"
+                nb_kw = row.get('nb_kw_perdus', 1)
+                nb_kw = 1 if pd.isna(nb_kw) else int(nb_kw)
+                report += f"| {mc} | {url} | {anc} | {dern} | {diff} | {vol:,} | {nb_kw} |\n"
             
-            # Info sur les KW non affichés
-            nb_petites_pertes = len(df_pertes_rapport) - len(df_pertes_critiques)
-            if nb_petites_pertes > 0:
-                report += f"\n_+ {nb_petites_pertes:,} KW avec des pertes < 5 positions (non affichés)_\n"
+            # Info sur les URLs non affichées
+            nb_autres_urls = len(df_pertes_par_url) - len(df_pertes_limited)
+            if nb_autres_urls > 0:
+                report += f"\n_+ {nb_autres_urls:,} autres URLs avec des pertes ≥ 5 positions (non affichées)_\n"
 
             # Filtrer les KW avec gains significatifs (≥ 5 positions)
             df_gains_significatifs = df_gains_rapport[df_gains_rapport['diff_pos'] >= 5].copy()
             
-            if 'volume' in df_gains_significatifs.columns:
-                df_gains_significatifs = df_gains_significatifs.sort_values(
-                    ['diff_pos', 'volume'], 
-                    ascending=[False, False]
-                )
+            # Grouper par URL et garder le KW principal :
+            # = celui avec le plus gros volume PARMI ceux où l'URL ranke bien maintenant (derniere_pos ≤ 10)
+            if 'volume' in df_gains_significatifs.columns and 'url' in df_gains_significatifs.columns and len(df_gains_significatifs) > 0:
+                # Filtrer les KW où l'URL ranke vraiment bien maintenant (top 10)
+                df_bien_ranke = df_gains_significatifs[df_gains_significatifs['derniere_pos'] <= 10].copy()
+                
+                if len(df_bien_ranke) > 0:
+                    idx_kw_principal = df_bien_ranke.groupby('url')['volume'].idxmax()
+                    df_gains_par_url = df_bien_ranke.loc[idx_kw_principal].copy()
+                else:
+                    idx_kw_principal = df_gains_significatifs.groupby('url')['volume'].idxmax()
+                    df_gains_par_url = df_gains_significatifs.loc[idx_kw_principal].copy()
+                
+                kw_count = df_gains_significatifs.groupby('url').size().rename('nb_kw_gains')
+                df_gains_par_url = df_gains_par_url.merge(kw_count, on='url', how='left')
+                
+                df_gains_par_url = df_gains_par_url.sort_values('diff_pos', ascending=False)
+            else:
+                df_gains_par_url = df_gains_significatifs.sort_values('diff_pos', ascending=False)
             
-            df_gains_limited = df_gains_significatifs.head(max_kw_rapport)
+            df_gains_limited = df_gains_par_url.head(max_kw_rapport)
             
             report += f"""
 
 ---
 
-# 5. GAINS SIGNIFICATIFS — TOP {len(df_gains_limited):,} (gains ≥ 5 positions)
+# 5. GAINS SIGNIFICATIFS — TOP {len(df_gains_limited):,} URLs (gains ≥ 5 positions)
 
-**✅ Ce qui fonctionne — à analyser pour répliquer**
+**✅ Ce qui fonctionne — KW principal = plus gros volume parmi ceux en top 10 actuel**
 
-| Mot-clé | URL | Ancienne pos | Nouvelle pos | Diff | Volume |
-|---------|-----|--------------|--------------|------|--------|
+| KW Principal | URL | Ancienne pos | Nouvelle pos | Diff | Volume | Nb KW gagnés |
+|--------------|-----|--------------|--------------|------|--------|--------------|
 """
             for _, row in df_gains_limited.iterrows():
                 mc = str(row.get('mot_cle', 'N/A'))[:50]
@@ -879,11 +911,13 @@ _Aucune URL en perte détectée_
                 diff = 0 if pd.isna(diff) else int(diff)
                 vol = row.get('volume', 0)
                 vol = 0 if pd.isna(vol) else int(vol)
-                report += f"| {mc} | {url} | {anc} | {dern} | +{diff} | {vol:,} |\n"
+                nb_kw = row.get('nb_kw_gains', 1)
+                nb_kw = 1 if pd.isna(nb_kw) else int(nb_kw)
+                report += f"| {mc} | {url} | {anc} | {dern} | +{diff} | {vol:,} | {nb_kw} |\n"
             
-            nb_petits_gains = len(df_gains_rapport) - len(df_gains_significatifs)
-            if nb_petits_gains > 0:
-                report += f"\n_+ {nb_petits_gains:,} KW avec des gains < 5 positions (non affichés)_\n"
+            nb_autres_urls = len(df_gains_par_url) - len(df_gains_limited)
+            if nb_autres_urls > 0:
+                report += f"\n_+ {nb_autres_urls:,} autres URLs avec des gains ≥ 5 positions (non affichées)_\n"
 
             report += f"""
 
