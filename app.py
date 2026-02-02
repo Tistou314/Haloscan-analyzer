@@ -174,7 +174,8 @@ def generate_report(df, df_filtered, kpis):
     
     # KW sortis
     if 'statut' in df_filtered.columns:
-        kw_sortis = df_filtered[df_filtered['statut'].str.lower().str.contains('sort|out', na=False)].nlargest(10, 'volume')
+        statut_str = df_filtered['statut'].astype(str).str.lower()
+        kw_sortis = df_filtered[statut_str.str.contains('sort|out', na=False)].nlargest(10, 'volume')
     else:
         kw_sortis = df_filtered[df_filtered['derniere_pos'] > 100].nlargest(10, 'volume') if 'derniere_pos' in df_filtered.columns else pd.DataFrame()
     
@@ -323,7 +324,7 @@ if uploaded_file:
         
         # Filtre par statut
         if 'statut' in df.columns:
-            statuts_disponibles = df['statut'].dropna().unique().tolist()
+            statuts_disponibles = df['statut'].astype(str).dropna().unique().tolist()
             statuts_selectionnes = st.multiselect(
                 "Statut",
                 options=statuts_disponibles,
@@ -413,10 +414,12 @@ if uploaded_file:
     
     # Détection des pertes/gains selon la colonne disponible
     if 'statut' in df_filtered.columns:
-        pertes = len(df_filtered[df_filtered['statut'].str.lower().str.contains('perd|lost|down', na=False)])
-        gains = len(df_filtered[df_filtered['statut'].str.lower().str.contains('gagn|gain|up', na=False)])
-        stables = len(df_filtered[df_filtered['statut'].str.lower().str.contains('stable', na=False)])
-        sortis = len(df_filtered[df_filtered['statut'].str.lower().str.contains('sort|out', na=False)])
+        # Conversion en string pour éviter les erreurs sur colonnes mixtes
+        statut_str = df_filtered['statut'].astype(str).str.lower()
+        pertes = len(df_filtered[statut_str.str.contains('perd|lost|down', na=False)])
+        gains = len(df_filtered[statut_str.str.contains('gagn|gain|up', na=False)])
+        stables = len(df_filtered[statut_str.str.contains('stable', na=False)])
+        sortis = len(df_filtered[statut_str.str.contains('sort|out', na=False)])
     elif 'diff_pos' in df_filtered.columns:
         pertes = len(df_filtered[df_filtered['diff_pos'] < 0])
         gains = len(df_filtered[df_filtered['diff_pos'] > 0])
@@ -510,7 +513,7 @@ if uploaded_file:
         with col1:
             st.subheader("Répartition par statut")
             if 'statut' in df_filtered.columns:
-                statut_counts = df_filtered['statut'].value_counts()
+                statut_counts = df_filtered['statut'].astype(str).value_counts()
                 fig_pie = px.pie(
                     values=statut_counts.values,
                     names=statut_counts.index,
@@ -696,7 +699,8 @@ if uploaded_file:
         st.header("❌ Mots-clés sortis des SERPs")
         
         if 'statut' in df_filtered.columns:
-            df_sortis = df_filtered[df_filtered['statut'].str.lower().str.contains('sort|out', na=False)]
+            statut_str = df_filtered['statut'].astype(str).str.lower()
+            df_sortis = df_filtered[statut_str.str.contains('sort|out', na=False)]
         elif 'derniere_pos' in df_filtered.columns:
             df_sortis = df_filtered[df_filtered['derniere_pos'] > 100]
         else:
