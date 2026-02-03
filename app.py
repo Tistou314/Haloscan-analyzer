@@ -1373,7 +1373,7 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
 |-----|-----------|------------|--------------|-----|
 """
                     for _, row in df_danger_rpt.head(20).iterrows():
-                        url = str(row.get('url', 'N/A'))[:60]
+                        url = str(row.get('url', 'N/A'))
                         clics = int(row.get('Clics', 0))
                         diff = round(row.get('diff_pos', 0), 1)
                         pos = round(row.get('Position', 0), 1)
@@ -1389,7 +1389,7 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
 |-----|----------|------------|-------------|-------------------|
 """
                     for _, row in df_ctr_rpt.head(20).iterrows():
-                        url = str(row.get('url', 'N/A'))[:60]
+                        url = str(row.get('url', 'N/A'))
                         pos = round(row.get('Position', 0), 1)
                         ctr = round(row.get('CTR', 0), 2)
                         impr = int(row.get('Impressions', 0))
