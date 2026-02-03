@@ -785,36 +785,38 @@ if uploaded_file:
                 # Trouver les KW avec plusieurs URLs
                 kw_url_counts = seobserver_df.groupby('Keyword').agg({
                     'Url': 'nunique',
-                    'Position': 'min',
-                    'Search Volume': 'first'
+                    'Position': 'min'
                 }).reset_index()
-                kw_url_counts.columns = ['Keyword', 'nb_urls', 'best_position', 'volume']
+                kw_url_counts.columns = ['Keyword', 'nb_urls', 'best_position']
+                
+                # Ajouter le volume si disponible (chercher la bonne colonne)
+                if 'Search Volume' in seobserver_df.columns:
+                    vol_by_kw = seobserver_df.groupby('Keyword')['Search Volume'].first().reset_index()
+                    vol_by_kw.columns = ['Keyword', 'volume']
+                    kw_url_counts = kw_url_counts.merge(vol_by_kw, on='Keyword', how='left')
+                else:
+                    kw_url_counts['volume'] = 0
                 
                 # Filtrer les KW cannibalisés (plus d'une URL)
-                kw_cannibalized = kw_url_counts[kw_url_counts['nb_urls'] > 1].sort_values('volume', ascending=False)
+                kw_cannibalized = kw_url_counts[kw_url_counts['nb_urls'] > 1].sort_values('nb_urls', ascending=False)
                 
                 st.metric("🔄 KW avec plusieurs URLs", f"{len(kw_cannibalized):,}")
                 
                 if len(kw_cannibalized) > 0:
-                    # Filtre volume
-                    vol_min_seo = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_seobserver")
-                    kw_cannibalized_f = kw_cannibalized[kw_cannibalized['volume'] >= vol_min_seo]
-                    
-                    st.success(f"**{len(kw_cannibalized_f):,}** KW cannibalisés avec volume ≥ {vol_min_seo}")
+                    st.success(f"**{len(kw_cannibalized):,}** KW cannibalisés détectés")
                     
                     # Pour chaque KW cannibalisé, afficher les URLs
                     resultats_seo = []
-                    for _, row in kw_cannibalized_f.head(200).iterrows():
+                    for _, row in kw_cannibalized.head(200).iterrows():
                         kw = row['Keyword']
                         urls_kw = seobserver_df[seobserver_df['Keyword'] == kw].sort_values('Position')
                         
                         for i, url_row in urls_kw.iterrows():
                             resultats_seo.append({
                                 'Keyword': kw,
-                                'Volume': row['volume'],
                                 'URL': url_row['Url'],
-                                'Position': url_row['Position'],
-                                'Nb URLs sur ce KW': row['nb_urls']
+                                'Position': int(url_row['Position']) if pd.notna(url_row['Position']) else 0,
+                                'Nb URLs sur ce KW': int(row['nb_urls'])
                             })
                     
                     df_seo_display = pd.DataFrame(resultats_seo)
@@ -865,23 +867,23 @@ if uploaded_file:
                         # Données SEObserver
                         urls_seo = seobserver_df[seobserver_df['Keyword'] == kw].sort_values('Position')
                         nb_urls_seo = len(urls_seo)
-                        positions_seo = urls_seo['Position'].tolist()[:3]  # Top 3 positions
                         urls_list_seo = urls_seo['Url'].tolist()[:3]
-                        vol = urls_seo['Search Volume'].iloc[0] if len(urls_seo) > 0 else 0
                         
-                        # Données Haloscan
+                        # Données Haloscan (récupérer le volume depuis Haloscan)
                         haloscan_kw = df_canni[df_canni['mot_cle'] == kw]
                         url_perte = haloscan_kw[haloscan_kw['diff_pos'] < 0].sort_values('diff_pos').head(1)
+                        vol = haloscan_kw['volume'].max() if 'volume' in haloscan_kw.columns else 0
+                        vol = vol if pd.notna(vol) else 0
                         
                         if len(url_perte) > 0:
                             resultats_combine.append({
                                 'Keyword': kw,
-                                'Volume': vol if pd.notna(vol) else 0,
+                                'Volume': int(vol),
                                 'Nb URLs (SEObserver)': nb_urls_seo,
                                 'URL en perte (Haloscan)': url_perte['url'].iloc[0],
-                                'Ancienne pos': url_perte['ancienne_pos'].iloc[0],
-                                'Nouvelle pos': url_perte['derniere_pos'].iloc[0],
-                                'Diff': url_perte['diff_pos'].iloc[0],
+                                'Ancienne pos': int(url_perte['ancienne_pos'].iloc[0]) if pd.notna(url_perte['ancienne_pos'].iloc[0]) else 0,
+                                'Nouvelle pos': int(url_perte['derniere_pos'].iloc[0]) if pd.notna(url_perte['derniere_pos'].iloc[0]) else 0,
+                                'Diff': int(url_perte['diff_pos'].iloc[0]) if pd.notna(url_perte['diff_pos'].iloc[0]) else 0,
                                 'Autres URLs (SEObserver)': ' | '.join(urls_list_seo[:2])
                             })
                     
@@ -889,7 +891,7 @@ if uploaded_file:
                         df_combine = pd.DataFrame(resultats_combine)
                         df_combine = df_combine.sort_values('Volume', ascending=False)
                         
-                        # Filtre
+                        # Filtre volume (depuis Haloscan)
                         vol_min_combine = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_combine")
                         df_combine_f = df_combine[df_combine['Volume'] >= vol_min_combine]
                         
