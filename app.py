@@ -131,7 +131,11 @@ if uploaded_leads:
     # Lire la feuille "Leads totaux par urls" (pas la première feuille qui contient les visites)
     try:
         xlsx = pd.ExcelFile(uploaded_leads)
-        # Chercher la feuille des leads
+        
+        # Afficher les feuilles disponibles
+        st.sidebar.caption(f"Feuilles : {xlsx.sheet_names}")
+        
+        # Chercher la feuille des leads par son nom exact ou contenant "lead"
         leads_sheet = None
         for sheet in xlsx.sheet_names:
             if 'lead' in sheet.lower():
@@ -140,15 +144,38 @@ if uploaded_leads:
         
         if leads_sheet:
             leads_df_raw = pd.read_excel(xlsx, sheet_name=leads_sheet)
-            st.sidebar.success(f"📊 Feuille chargée : {leads_sheet}")
+            st.sidebar.success(f"📊 Feuille chargée : {leads_sheet} ({len(leads_df_raw)} lignes)")
         else:
-            # Par défaut, prendre la 2e feuille si elle existe, sinon la 1ère
+            # IMPORTANT: La feuille des leads est généralement la 2ème (index 1)
+            # La 1ère feuille (index 0) contient les visites
             if len(xlsx.sheet_names) > 1:
                 leads_df_raw = pd.read_excel(xlsx, sheet_name=1)
-                st.sidebar.info(f"📊 Feuille chargée : {xlsx.sheet_names[1]}")
+                st.sidebar.success(f"📊 Feuille chargée : {xlsx.sheet_names[1]} ({len(leads_df_raw)} lignes)")
             else:
                 leads_df_raw = pd.read_excel(xlsx, sheet_name=0)
-                st.sidebar.info(f"📊 Feuille chargée : {xlsx.sheet_names[0]}")
+                st.sidebar.warning(f"⚠️ Une seule feuille : {xlsx.sheet_names[0]}")
+        
+        # VÉRIFICATION : Les leads doivent avoir des valeurs faibles (< 1000 en général)
+        # Si la moyenne est > 500, c'est probablement les visites
+        month_cols_check = [c for c in leads_df_raw.columns if '2025' in str(c) or '2024' in str(c)]
+        if month_cols_check:
+            mean_val = leads_df_raw[month_cols_check].mean().mean()
+            if mean_val > 500:
+                st.sidebar.error(f"⚠️ ATTENTION : Moyenne = {mean_val:.0f} — Ce sont probablement les VISITES, pas les leads !")
+                st.sidebar.info("Vérifiez que la feuille 'Leads totaux par urls' est bien dans le fichier")
+            else:
+                st.sidebar.info(f"✅ Moyenne = {mean_val:.1f} — Données leads OK")
+        
+        # Debug : afficher un aperçu pour confirmer
+        with st.sidebar.expander("🔍 Vérification données leads", expanded=False):
+            st.write(f"Feuilles disponibles : {xlsx.sheet_names}")
+            st.write(f"Lignes : {len(leads_df_raw)}")
+            # Trouver une colonne de mois pour montrer un exemple
+            sample_cols = [c for c in leads_df_raw.columns if '2025' in str(c)][:2]
+            if sample_cols and 'url' in leads_df_raw.columns:
+                st.write(f"Exemple (premières lignes) :")
+                st.dataframe(leads_df_raw[['url'] + sample_cols].head(3))
+                
     except Exception as e:
         leads_df_raw = pd.read_excel(uploaded_leads)
         st.sidebar.warning(f"Lecture par défaut (erreur: {e})")
@@ -502,12 +529,14 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
         
         # Métriques leads si disponibles
         if has_leads_merged:
-            # Leads sur les URLs en perte
-            urls_en_perte = df_f[df_f['diff_pos'] < 0]['url'].unique() if 'url' in df_f.columns else []
-            leads_urls_perte = df_f[df_f['url'].isin(urls_en_perte)]['leads_total'].fillna(0).sum()
+            # Leads sur les URLs en perte - NE PAS compter plusieurs fois la même URL
+            df_pertes_dash = df_f[df_f['diff_pos'] < 0]
+            df_urls_perte_unique = df_pertes_dash.drop_duplicates(subset=['url']) if 'url' in df_pertes_dash.columns else df_pertes_dash
+            
+            leads_urls_perte = df_urls_perte_unique['leads_total'].fillna(0).sum()
             c3.metric("⚠️ Leads sur URLs en perte", f"{int(leads_urls_perte):,}")
             
-            leads_evol = df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum()
+            leads_evol = df_urls_perte_unique['leads_evolution'].fillna(0).sum()
             delta_color = "inverse" if leads_evol < 0 else "normal"
             c4.metric("📊 Évol. leads (période)", f"{int(leads_evol):+,}", delta_color=delta_color)
         
@@ -937,15 +966,25 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
                     st.warning(f"Erreur agrégation URLs: {e}")
                     urls_critiques = pd.DataFrame()
             
-            # Calcul impact leads
+            # Calcul impact leads - ATTENTION : éviter de compter plusieurs fois la même URL
             if has_leads_merged:
-                total_leads_perte = int(df_pertes_rapport['leads_total'].fillna(0).sum())
-                total_leads_avant_perte = int(df_pertes_rapport['leads_avant'].fillna(0).sum())
-                total_leads_apres_perte = int(df_pertes_rapport['leads_apres'].fillna(0).sum())
-                leads_evolution_total = int(df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum())
+                # Grouper par URL pour ne compter qu'une fois les leads de chaque URL
+                urls_en_perte = df_pertes_rapport['url'].unique() if 'url' in df_pertes_rapport.columns else []
+                df_urls_perte_unique = df_pertes_rapport.drop_duplicates(subset=['url'])
+                
+                total_leads_perte = int(df_urls_perte_unique['leads_total'].fillna(0).sum())
+                total_leads_avant_perte = int(df_urls_perte_unique['leads_avant'].fillna(0).sum())
+                total_leads_apres_perte = int(df_urls_perte_unique['leads_apres'].fillna(0).sum())
+                leads_evolution_total = int(df_urls_perte_unique['leads_evolution'].fillna(0).sum())
+            
+            # Définir la période pour le titre du rapport
+            if has_dual_haloscan:
+                periode_rapport = f"{label_debut_p1} → {label_fin_p2}"
+            else:
+                periode_rapport = "Période analysée"
             
             report = f"""# 📊 RAPPORT D'ANALYSE SEO COMPLET
-## Période : Septembre 2025 → Février 2026
+## Période : {periode_rapport}
 ## Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}
 
 ---
@@ -980,6 +1019,52 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
 ⚠️ **Ces URLs génèrent des leads et perdent en visibilité SEO = PRIORITÉ MAXIMALE**
 
 """
+
+            # Section multi-périodes si disponible
+            if has_dual_haloscan and 'tendance_multi' in df_f.columns:
+                tendances = df_f['tendance_multi'].value_counts()
+                chute_continue = tendances.get('📉📉 Chute continue', 0)
+                rebond_rechute = tendances.get('📈📉 Rebond puis rechute', 0)
+                recuperation = tendances.get('📉📈 Récupération', 0)
+                hausse_continue = tendances.get('📈📈 Hausse continue', 0)
+                
+                report += f"""---
+
+## 📈 ANALYSE MULTI-PÉRIODES ({label_debut_p1} → {label_fin_p1} → {label_fin_p2})
+
+| Tendance | Nombre de KW | Signification |
+|----------|--------------|---------------|
+| 📉📉 **Chute continue** | {chute_continue:,} | Perte sur P1 ET P2 — **Problème structurel** |
+| 📈📉 Rebond puis rechute | {rebond_rechute:,} | Gain sur P1 puis perte sur P2 |
+| 📉📈 Récupération | {recuperation:,} | Perte sur P1 puis gain sur P2 |
+| 📈📈 Hausse continue | {hausse_continue:,} | Gain sur P1 ET P2 |
+
+"""
+                # Ajouter les KW en chute continue (TOP 100)
+                df_chute_continue = df_f[df_f['tendance_multi'] == '📉📉 Chute continue'].copy()
+                if len(df_chute_continue) > 0:
+                    report += f"""### 🚨 TOP 100 KW en CHUTE CONTINUE — Priorité maximale
+
+| Mot-clé | URL | Pos {label_debut_p1} | Pos {label_fin_p1} | Δ P1 | Pos {label_fin_p2} | Δ P2 | Δ TOTAL | Volume |
+|---------|-----|---------------------|--------------------|----- |--------------------|----- |---------|--------|
+"""
+                    # Trier par diff totale
+                    df_chute_continue = df_chute_continue.sort_values('diff_pos', ascending=True)
+                    
+                    for _, row in df_chute_continue.head(100).iterrows():
+                        mc = str(row.get('mot_cle', 'N/A'))[:40]
+                        url = str(row.get('url', 'N/A'))
+                        pos_debut = int(row.get('pos_debut_p1', 0)) if pd.notna(row.get('pos_debut_p1')) else 0
+                        pos_mid = int(row.get('pos_fin_p1', 0)) if pd.notna(row.get('pos_fin_p1')) else 0
+                        diff_p1 = int(row.get('diff_p1', 0)) if pd.notna(row.get('diff_p1')) else 0
+                        pos_fin = int(row.get('pos_fin_p2', 0)) if pd.notna(row.get('pos_fin_p2')) else 0
+                        diff_p2 = int(row.get('diff_p2', 0)) if pd.notna(row.get('diff_p2')) else 0
+                        diff_tot = int(row.get('diff_pos', 0)) if pd.notna(row.get('diff_pos')) else 0
+                        vol = int(row.get('volume', 0)) if pd.notna(row.get('volume')) else 0
+                        report += f"| {mc} | {url} | {pos_debut} | {pos_mid} | {diff_p1} | {pos_fin} | {diff_p2} | {diff_tot} | {vol:,} |\n"
+                    
+                    if len(df_chute_continue) > 100:
+                        report += f"\n_+ {len(df_chute_continue) - 100:,} autres KW en chute continue (non affichés)_\n"
 
             report += """---
 
