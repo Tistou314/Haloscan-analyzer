@@ -305,8 +305,8 @@ if has_dual_haloscan:
     df['ancienne_pos'] = df['pos_debut_p1'].fillna(df['pos_debut_p2'])
     # Position finale = pos_fin_p2 (ou pos_fin_p1 si pas de P2)
     df['derniere_pos'] = df['pos_fin_p2'].fillna(df['pos_fin_p1'])
-    # Diff totale
-    df['diff_pos'] = df['derniere_pos'] - df['ancienne_pos']
+    # Diff totale : positif = gain (ancienne - dernière, car passer de 96 à 1 = +95)
+    df['diff_pos'] = df['ancienne_pos'] - df['derniere_pos']
     
     # Calculer la tendance multi-période
     def calc_tendance_multi(row):
