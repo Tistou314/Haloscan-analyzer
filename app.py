@@ -886,9 +886,9 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
                         # Filtres
                         col1, col2 = st.columns(2)
                         with col1:
-                            vol_min_canni = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_canni")
+                            vol_min_canni = st.number_input("Volume minimum", min_value=0, value=0, step=50, key="vol_canni")
                         with col2:
-                            diff_min_canni = st.number_input("Perte minimum (positions)", min_value=1, value=5, step=1, key="diff_canni")
+                            diff_min_canni = st.number_input("Perte minimum (positions)", min_value=1, value=1, step=1, key="diff_canni")
                         
                         # Appliquer filtres
                         df_resultats_f = df_resultats[
