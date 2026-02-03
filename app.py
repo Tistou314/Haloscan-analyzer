@@ -888,12 +888,12 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
                         with col1:
                             vol_min_canni = st.number_input("Volume minimum", min_value=0, value=0, step=50, key="vol_canni")
                         with col2:
-                            diff_min_canni = st.number_input("Perte minimum (positions)", min_value=1, value=1, step=1, key="diff_canni")
+                            diff_min_canni = st.number_input("Perte minimum (positions)", min_value=0, value=0, step=1, key="diff_canni")
                         
-                        # Appliquer filtres
+                        # Appliquer filtres (fillna pour éviter que les NaN soient exclus)
                         df_resultats_f = df_resultats[
-                            (df_resultats['volume'] >= vol_min_canni) & 
-                            (df_resultats['diff_perte'].abs() >= diff_min_canni)
+                            (df_resultats['volume'].fillna(0) >= vol_min_canni) & 
+                            (df_resultats['diff_perte'].fillna(0).abs() >= diff_min_canni)
                         ]
                         
                         st.success(f"**{len(df_resultats_f):,}** cas de cannibalisation détectés (sur {len(df_resultats):,} total)")
