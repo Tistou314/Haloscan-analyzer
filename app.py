@@ -114,6 +114,10 @@ with st.sidebar:
     st.subheader("💰 Données business")
     uploaded_leads = st.file_uploader("3️⃣ Excel Leads par URL (optionnel)", type=['xlsx', 'xls'], 
                                        help="Fichier avec colonnes: url, puis une colonne par mois (YYYY_MM)")
+    
+    st.subheader("🔍 Search Console")
+    uploaded_gsc = st.file_uploader("4️⃣ ZIP Search Console (optionnel)", type=['zip'],
+                                     help="Export ZIP de Google Search Console (Performance)")
 
 # Variables globales pour les leads
 leads_df = None
@@ -126,6 +130,11 @@ periode_apres = []
 has_dual_haloscan = False
 df_p1 = None
 df_p2 = None
+
+# Variables pour Search Console
+gsc_queries_df = None
+gsc_pages_df = None
+has_gsc = False
 
 if uploaded_leads:
     # Lire la feuille "Leads totaux par urls" (pas la première feuille qui contient les visites)
@@ -259,6 +268,69 @@ if uploaded_leads:
     st.sidebar.success(f"✅ {len(leads_df):,} URLs avec données leads")
     if periode_avant and periode_apres:
         st.sidebar.info(f"Comparaison : {periode_avant_label} → {periode_apres_label}")
+
+# Charger Search Console si uploadé
+if uploaded_gsc:
+    import zipfile
+    import io
+    
+    try:
+        with zipfile.ZipFile(uploaded_gsc, 'r') as z:
+            # Chercher les fichiers Requêtes et Pages
+            files_in_zip = z.namelist()
+            
+            queries_file = None
+            pages_file = None
+            
+            for f in files_in_zip:
+                if 'Requêtes' in f or 'Queries' in f or 'requetes' in f.lower():
+                    queries_file = f
+                elif 'Pages' in f or 'pages' in f.lower():
+                    pages_file = f
+            
+            # Charger Requêtes
+            if queries_file:
+                with z.open(queries_file) as qf:
+                    gsc_queries_df = pd.read_csv(qf)
+                    # Normaliser les noms de colonnes
+                    gsc_queries_df.columns = gsc_queries_df.columns.str.strip()
+                    # Renommer la première colonne en 'query'
+                    first_col = gsc_queries_df.columns[0]
+                    gsc_queries_df = gsc_queries_df.rename(columns={first_col: 'query'})
+                    # Convertir CTR en float
+                    if 'CTR' in gsc_queries_df.columns:
+                        gsc_queries_df['CTR'] = gsc_queries_df['CTR'].astype(str).str.replace('%', '').str.replace(',', '.').astype(float)
+                    # Normaliser les requêtes pour le matching
+                    gsc_queries_df['query_normalized'] = gsc_queries_df['query'].str.lower().str.strip()
+            
+            # Charger Pages
+            if pages_file:
+                with z.open(pages_file) as pf:
+                    gsc_pages_df = pd.read_csv(pf)
+                    # Normaliser les noms de colonnes
+                    gsc_pages_df.columns = gsc_pages_df.columns.str.strip()
+                    # Renommer la première colonne en 'url'
+                    first_col = gsc_pages_df.columns[0]
+                    gsc_pages_df = gsc_pages_df.rename(columns={first_col: 'url'})
+                    # Convertir CTR en float
+                    if 'CTR' in gsc_pages_df.columns:
+                        gsc_pages_df['CTR'] = gsc_pages_df['CTR'].astype(str).str.replace('%', '').str.replace(',', '.').astype(float)
+                    # Normaliser les URLs pour le matching
+                    gsc_pages_df['url_normalized'] = gsc_pages_df['url'].apply(normalize_url)
+            
+            if gsc_queries_df is not None or gsc_pages_df is not None:
+                has_gsc = True
+                gsc_info = []
+                if gsc_queries_df is not None:
+                    gsc_info.append(f"{len(gsc_queries_df):,} requêtes")
+                if gsc_pages_df is not None:
+                    gsc_info.append(f"{len(gsc_pages_df):,} pages")
+                st.sidebar.success(f"🔍 GSC : {' | '.join(gsc_info)}")
+            else:
+                st.sidebar.warning("⚠️ Fichiers Requêtes/Pages non trouvés dans le ZIP")
+                
+    except Exception as e:
+        st.sidebar.error(f"❌ Erreur lecture ZIP GSC: {e}")
 
 # Déterminer le mode de fonctionnement
 uploaded_file = None
@@ -525,7 +597,7 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
     # ONGLETS
     # ==========================================================================
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "🔴 Pertes", "📁 Par URL", "🟢 Gains", "🔄 Cannibalisation", "📝 Rapport"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Dashboard", "🔴 Pertes", "📁 Par URL", "🟢 Gains", "🔄 Cannibalisation", "🔍 Search Console", "📝 Rapport"])
     
     # TAB 1: DASHBOARD
     with tab1:
@@ -935,8 +1007,182 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
         else:
             st.warning("Colonnes 'mot_cle' et 'url' nécessaires pour l'analyse de cannibalisation")
     
-    # TAB 6: RAPPORT
+    # TAB 6: SEARCH CONSOLE
     with tab6:
+        st.header("🔍 Données Search Console")
+        
+        if has_gsc:
+            st.info("**Données réelles Google** : Clics, impressions, CTR et positions moyennes des 12 derniers mois")
+            
+            # Créer les sous-onglets GSC
+            gsc_tab1, gsc_tab2, gsc_tab3 = st.tabs(["🚨 URLs en danger", "💡 Opportunités CTR", "📊 Vue globale"])
+            
+            # === ONGLET 1 : URLs EN DANGER ===
+            with gsc_tab1:
+                st.subheader("🚨 URLs en danger : Perte SEO + Trafic réel")
+                st.caption("URLs qui perdent des positions Haloscan ET qui ont beaucoup de clics GSC → Perte de trafic réelle")
+                
+                if gsc_pages_df is not None and 'url' in df_f.columns:
+                    # Agréger les données Haloscan par URL
+                    df_haloscan_urls = df_f.groupby('url').agg({
+                        'diff_pos': ['mean', 'sum', 'count'],
+                        'volume': 'sum'
+                    }).reset_index()
+                    df_haloscan_urls.columns = ['url', 'diff_pos_mean', 'diff_pos_sum', 'nb_kw', 'volume_total']
+                    df_haloscan_urls['url_normalized'] = df_haloscan_urls['url'].apply(normalize_url)
+                    
+                    # Fusionner avec GSC
+                    df_danger = df_haloscan_urls.merge(
+                        gsc_pages_df[['url_normalized', 'Clics', 'Impressions', 'CTR', 'Position']],
+                        on='url_normalized',
+                        how='inner'
+                    )
+                    
+                    # URLs en danger = diff négative + beaucoup de clics
+                    df_danger = df_danger[df_danger['diff_pos_mean'] < 0].copy()
+                    df_danger['score_danger'] = df_danger['Clics'] * df_danger['diff_pos_mean'].abs()
+                    df_danger = df_danger.sort_values('score_danger', ascending=False)
+                    
+                    # Métriques
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("URLs en danger", f"{len(df_danger):,}")
+                    col2.metric("Clics totaux menacés", f"{int(df_danger['Clics'].sum()):,}")
+                    col3.metric("Impressions menacées", f"{int(df_danger['Impressions'].sum()):,}")
+                    
+                    if len(df_danger) > 0:
+                        # Afficher le tableau
+                        df_danger_display = df_danger[['url', 'Clics', 'Impressions', 'CTR', 'Position', 'diff_pos_mean', 'nb_kw', 'volume_total']].copy()
+                        df_danger_display = df_danger_display.rename(columns={
+                            'Clics': '🖱️ Clics GSC',
+                            'Impressions': '👁️ Impressions',
+                            'CTR': '📊 CTR %',
+                            'Position': '📍 Pos GSC',
+                            'diff_pos_mean': '📉 Δ Haloscan',
+                            'nb_kw': 'Nb KW',
+                            'volume_total': 'Vol. total'
+                        })
+                        df_danger_display['📉 Δ Haloscan'] = df_danger_display['📉 Δ Haloscan'].round(1)
+                        
+                        st.dataframe(df_danger_display.head(50), use_container_width=True, height=400)
+                        
+                        st.error("""
+                        **🚨 ACTION REQUISE** : Ces URLs perdent des positions ET génèrent du trafic réel.
+                        → Prioriser leur réoptimisation pour éviter une perte de trafic
+                        """)
+                        
+                        # Export
+                        csv_danger = df_danger.to_csv(index=False, sep=';').encode('utf-8')
+                        st.download_button("📥 Exporter les URLs en danger (CSV)", csv_danger, "urls_danger_gsc.csv")
+                    else:
+                        st.success("✅ Aucune URL en danger détectée !")
+                else:
+                    st.warning("Données Pages GSC ou URLs Haloscan non disponibles")
+            
+            # === ONGLET 2 : OPPORTUNITÉS CTR ===
+            with gsc_tab2:
+                st.subheader("💡 Opportunités CTR : Bien positionné mais peu cliqué")
+                st.caption("URLs en Top 10 avec CTR < 5% → Title et meta description à optimiser")
+                
+                if gsc_pages_df is not None:
+                    # Filtrer : Position < 10 et CTR < 5%
+                    df_ctr_opps = gsc_pages_df[
+                        (gsc_pages_df['Position'] <= 10) & 
+                        (gsc_pages_df['CTR'] < 5) &
+                        (gsc_pages_df['Impressions'] >= 100)  # Au moins 100 impressions pour être significatif
+                    ].copy()
+                    
+                    # Calculer le potentiel de clics
+                    # Si CTR passait à 5%, combien de clics en plus ?
+                    df_ctr_opps['ctr_potentiel'] = 5.0
+                    df_ctr_opps['clics_potentiels'] = (df_ctr_opps['Impressions'] * df_ctr_opps['ctr_potentiel'] / 100).astype(int)
+                    df_ctr_opps['clics_supplementaires'] = df_ctr_opps['clics_potentiels'] - df_ctr_opps['Clics']
+                    df_ctr_opps = df_ctr_opps.sort_values('clics_supplementaires', ascending=False)
+                    
+                    # Métriques
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("URLs à optimiser", f"{len(df_ctr_opps):,}")
+                    col2.metric("Clics actuels", f"{int(df_ctr_opps['Clics'].sum()):,}")
+                    col3.metric("Potentiel clics en +", f"+{int(df_ctr_opps['clics_supplementaires'].sum()):,}")
+                    
+                    if len(df_ctr_opps) > 0:
+                        # Afficher le tableau
+                        df_ctr_display = df_ctr_opps[['url', 'Position', 'CTR', 'Clics', 'Impressions', 'clics_supplementaires']].copy()
+                        df_ctr_display = df_ctr_display.rename(columns={
+                            'Position': '📍 Position',
+                            'CTR': '📊 CTR actuel %',
+                            'Clics': '🖱️ Clics',
+                            'Impressions': '👁️ Impressions',
+                            'clics_supplementaires': '🎯 Potentiel clics +'
+                        })
+                        df_ctr_display['📍 Position'] = df_ctr_display['📍 Position'].round(1)
+                        
+                        st.dataframe(df_ctr_display.head(50), use_container_width=True, height=400)
+                        
+                        st.warning("""
+                        **💡 OPTIMISATION RECOMMANDÉE** :
+                        - Revoir les **titles** pour les rendre plus attractifs
+                        - Améliorer les **meta descriptions** avec des CTA
+                        - Ajouter des **données structurées** pour enrichir les snippets
+                        """)
+                        
+                        # Export
+                        csv_ctr = df_ctr_opps.to_csv(index=False, sep=';').encode('utf-8')
+                        st.download_button("📥 Exporter les opportunités CTR (CSV)", csv_ctr, "opportunites_ctr.csv")
+                    else:
+                        st.success("✅ Toutes les URLs en Top 10 ont un bon CTR !")
+                else:
+                    st.warning("Données Pages GSC non disponibles")
+            
+            # === ONGLET 3 : VUE GLOBALE ===
+            with gsc_tab3:
+                st.subheader("📊 Vue globale Search Console")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**🔍 Top Requêtes (par clics)**")
+                    if gsc_queries_df is not None:
+                        st.dataframe(
+                            gsc_queries_df[['query', 'Clics', 'Impressions', 'CTR', 'Position']].head(20),
+                            use_container_width=True,
+                            height=400
+                        )
+                    else:
+                        st.info("Données requêtes non disponibles")
+                
+                with col2:
+                    st.markdown("**📄 Top Pages (par clics)**")
+                    if gsc_pages_df is not None:
+                        df_pages_display = gsc_pages_df[['url', 'Clics', 'Impressions', 'CTR', 'Position']].head(20).copy()
+                        # Raccourcir les URLs pour l'affichage
+                        df_pages_display['url'] = df_pages_display['url'].str.replace('https://www.ootravaux.fr', '...')
+                        st.dataframe(df_pages_display, use_container_width=True, height=400)
+                    else:
+                        st.info("Données pages non disponibles")
+                
+                # Stats globales
+                st.divider()
+                st.markdown("**📈 Statistiques globales GSC**")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                if gsc_pages_df is not None:
+                    col1.metric("Total Clics", f"{int(gsc_pages_df['Clics'].sum()):,}")
+                    col2.metric("Total Impressions", f"{int(gsc_pages_df['Impressions'].sum()):,}")
+                    col3.metric("CTR moyen", f"{gsc_pages_df['CTR'].mean():.2f}%")
+                    col4.metric("Position moyenne", f"{gsc_pages_df['Position'].mean():.1f}")
+        
+        else:
+            st.warning("👆 Uploadez un fichier ZIP Search Console pour voir les données de trafic réel")
+            st.info("""
+            **Comment obtenir l'export :**
+            1. Allez sur [Google Search Console](https://search.google.com/search-console)
+            2. Sélectionnez votre propriété
+            3. Allez dans "Performances" > "Résultats de recherche"
+            4. Cliquez sur "Exporter" > "Télécharger au format ZIP"
+            """)
+    
+    # TAB 7: RAPPORT
+    with tab7:
         st.header("📝 Rapport complet pour l'équipe édito")
         
         if st.button("🔄 Générer le rapport complet", type="primary"):
@@ -1079,6 +1325,76 @@ if (has_dual_haloscan or uploaded_file) and 'df' in dir():
                     
                     if len(df_chute_continue) > 100:
                         report += f"\n_+ {len(df_chute_continue) - 100:,} autres KW en chute continue (non affichés)_\n"
+
+            # Section Search Console si disponible
+            if has_gsc and gsc_pages_df is not None and 'url' in df_f.columns:
+                # Calculer les URLs en danger
+                df_haloscan_urls_rpt = df_f.groupby('url').agg({
+                    'diff_pos': 'mean',
+                    'volume': 'sum'
+                }).reset_index()
+                df_haloscan_urls_rpt['url_normalized'] = df_haloscan_urls_rpt['url'].apply(normalize_url)
+                
+                df_danger_rpt = df_haloscan_urls_rpt.merge(
+                    gsc_pages_df[['url_normalized', 'Clics', 'Impressions', 'CTR', 'Position']],
+                    on='url_normalized',
+                    how='inner'
+                )
+                df_danger_rpt = df_danger_rpt[df_danger_rpt['diff_pos'] < 0].copy()
+                df_danger_rpt = df_danger_rpt.sort_values('Clics', ascending=False)
+                
+                # Opportunités CTR
+                df_ctr_rpt = gsc_pages_df[
+                    (gsc_pages_df['Position'] <= 10) & 
+                    (gsc_pages_df['CTR'] < 5) &
+                    (gsc_pages_df['Impressions'] >= 100)
+                ].copy()
+                df_ctr_rpt['clics_potentiels'] = (df_ctr_rpt['Impressions'] * 5 / 100 - df_ctr_rpt['Clics']).astype(int)
+                df_ctr_rpt = df_ctr_rpt.sort_values('clics_potentiels', ascending=False)
+                
+                report += f"""---
+
+## 🔍 DONNÉES SEARCH CONSOLE (12 derniers mois)
+
+| Métrique | Valeur |
+|----------|--------|
+| **Total clics** | {int(gsc_pages_df['Clics'].sum()):,} |
+| **Total impressions** | {int(gsc_pages_df['Impressions'].sum()):,} |
+| **CTR moyen** | {gsc_pages_df['CTR'].mean():.2f}% |
+| **URLs en danger (perte + clics)** | {len(df_danger_rpt):,} |
+| **Opportunités CTR (Top 10, CTR < 5%)** | {len(df_ctr_rpt):,} |
+| **Clics potentiels à gagner** | +{int(df_ctr_rpt['clics_potentiels'].sum()):,} |
+
+"""
+                if len(df_danger_rpt) > 0:
+                    report += """### 🚨 TOP 20 URLs EN DANGER (Perte SEO + Trafic réel)
+
+| URL | Clics GSC | Δ Haloscan | Position GSC | CTR |
+|-----|-----------|------------|--------------|-----|
+"""
+                    for _, row in df_danger_rpt.head(20).iterrows():
+                        url = str(row.get('url', 'N/A'))[:60]
+                        clics = int(row.get('Clics', 0))
+                        diff = round(row.get('diff_pos', 0), 1)
+                        pos = round(row.get('Position', 0), 1)
+                        ctr = round(row.get('CTR', 0), 2)
+                        report += f"| {url} | {clics:,} | {diff} | {pos} | {ctr}% |\n"
+                
+                if len(df_ctr_rpt) > 0:
+                    report += """
+
+### 💡 TOP 20 OPPORTUNITÉS CTR (à optimiser)
+
+| URL | Position | CTR actuel | Impressions | Potentiel clics + |
+|-----|----------|------------|-------------|-------------------|
+"""
+                    for _, row in df_ctr_rpt.head(20).iterrows():
+                        url = str(row.get('url', 'N/A'))[:60]
+                        pos = round(row.get('Position', 0), 1)
+                        ctr = round(row.get('CTR', 0), 2)
+                        impr = int(row.get('Impressions', 0))
+                        pot = int(row.get('clics_potentiels', 0))
+                        report += f"| {url} | {pos} | {ctr}% | {impr:,} | +{pot:,} |\n"
 
             report += """---
 
