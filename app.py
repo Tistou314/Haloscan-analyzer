@@ -8,6 +8,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+import json
 
 st.set_page_config(
     page_title="Haloscan SEO Diff Analyzer",
@@ -118,6 +119,10 @@ with st.sidebar:
     st.subheader("🔍 Search Console")
     uploaded_gsc = st.file_uploader("4️⃣ ZIP Search Console (optionnel)", type=['zip'],
                                      help="Export ZIP de Google Search Console (Performance)")
+    
+    st.subheader("🤖 Analyse IA")
+    anthropic_api_key = st.text_input("Clé API Anthropic", type="password", 
+                                       help="Pour générer l'analyse IA du rapport")
 
 # Variables globales pour les leads
 leads_df = None
@@ -1653,6 +1658,188 @@ _Données : {len(df):,} mots-clés analysés"""
         
         if 'report' in st.session_state:
             st.markdown(st.session_state['report'])
+            
+            st.divider()
+            
+            # === ANALYSE IA ===
+            st.subheader("🤖 Analyse IA et TODO")
+            
+            if anthropic_api_key:
+                if st.button("🤖 Générer l'analyse IA", type="secondary"):
+                    with st.spinner("Claude Opus 4.5 analyse vos données... (peut prendre 30-60 secondes)"):
+                        try:
+                            import anthropic
+                            
+                            client = anthropic.Anthropic(api_key=anthropic_api_key)
+                            
+                            # Préparer les données pour le LLM
+                            # 1. Métriques globales
+                            metrics_globales = {
+                                "total_kw": total,
+                                "kw_en_perte": pertes,
+                                "kw_en_gain": gains,
+                                "kw_stables": stables,
+                                "volume_perdu": vol_perdu,
+                                "volume_gagne": vol_gagne,
+                                "bilan_volume": vol_gagne - vol_perdu
+                            }
+                            
+                            # 2. Top 50 URLs critiques (en perte)
+                            df_pertes_ia = df_f[df_f['diff_pos'] < 0].copy()
+                            if 'url' in df_pertes_ia.columns:
+                                urls_critiques_ia = df_pertes_ia.groupby('url').agg({
+                                    'diff_pos': ['count', 'mean'],
+                                    'volume': 'sum'
+                                }).reset_index()
+                                urls_critiques_ia.columns = ['url', 'nb_kw_perdus', 'diff_moyenne', 'volume_total']
+                                
+                                # Ajouter leads si disponible
+                                if has_leads_merged:
+                                    leads_by_url = df_pertes_ia.groupby('url').agg({
+                                        'leads_total': 'first',
+                                        'leads_evolution': 'first'
+                                    }).reset_index()
+                                    urls_critiques_ia = urls_critiques_ia.merge(leads_by_url, on='url', how='left')
+                                
+                                urls_critiques_ia = urls_critiques_ia.sort_values('volume_total', ascending=False).head(50)
+                                urls_critiques_list = urls_critiques_ia.to_dict('records')
+                            else:
+                                urls_critiques_list = []
+                            
+                            # 3. Top 30 KW en perte (les plus impactants)
+                            top_kw_pertes = df_pertes_ia.nlargest(30, 'volume')[['mot_cle', 'url', 'diff_pos', 'volume', 'ancienne_pos', 'derniere_pos']].to_dict('records') if 'volume' in df_pertes_ia.columns else []
+                            
+                            # 4. Données multi-périodes si disponibles
+                            tendances_multi = {}
+                            if has_dual_haloscan and 'tendance_multi' in df_f.columns:
+                                tendances_multi = df_f['tendance_multi'].value_counts().to_dict()
+                                # Top 20 en chute continue
+                                df_chute = df_f[df_f['tendance_multi'] == '📉📉 Chute continue'].head(20)
+                                if len(df_chute) > 0:
+                                    tendances_multi['top_chute_continue'] = df_chute[['mot_cle', 'url', 'diff_pos', 'volume']].to_dict('records')
+                            
+                            # 5. Données GSC si disponibles
+                            gsc_data = {}
+                            if has_gsc and gsc_pages_df is not None:
+                                gsc_data['total_clics'] = int(gsc_pages_df['Clics'].sum())
+                                gsc_data['total_impressions'] = int(gsc_pages_df['Impressions'].sum())
+                                gsc_data['ctr_moyen'] = round(gsc_pages_df['CTR'].mean(), 2)
+                                # Top 20 pages par clics
+                                gsc_data['top_pages'] = gsc_pages_df.nlargest(20, 'Clics')[['url', 'Clics', 'Impressions', 'CTR', 'Position']].to_dict('records')
+                            
+                            # 6. Cannibalisations
+                            cannibalisations = []
+                            if 'mot_cle' in df_f.columns:
+                                df_canni_ia = df_f[['mot_cle', 'url', 'diff_pos', 'volume']].copy()
+                                df_pertes_c = df_canni_ia[df_canni_ia['diff_pos'] < 0]
+                                df_gains_c = df_canni_ia[df_canni_ia['diff_pos'] > 0]
+                                kw_perte = set(df_pertes_c['mot_cle'].unique())
+                                kw_gain = set(df_gains_c['mot_cle'].unique())
+                                kw_canni = kw_perte & kw_gain
+                                if len(kw_canni) > 0:
+                                    for kw in list(kw_canni)[:20]:
+                                        url_perte = df_pertes_c[df_pertes_c['mot_cle'] == kw].iloc[0]['url'] if len(df_pertes_c[df_pertes_c['mot_cle'] == kw]) > 0 else None
+                                        url_gain = df_gains_c[df_gains_c['mot_cle'] == kw].iloc[0]['url'] if len(df_gains_c[df_gains_c['mot_cle'] == kw]) > 0 else None
+                                        if url_perte and url_gain:
+                                            cannibalisations.append({'mot_cle': kw, 'url_perte': url_perte, 'url_gain': url_gain})
+                            
+                            # Construire le contexte JSON
+                            context_data = {
+                                "metriques_globales": metrics_globales,
+                                "urls_critiques": urls_critiques_list,
+                                "top_kw_en_perte": top_kw_pertes,
+                                "tendances_multi_periodes": tendances_multi,
+                                "donnees_gsc": gsc_data,
+                                "cannibalisations_detectees": cannibalisations,
+                                "has_leads": has_leads_merged,
+                                "has_gsc": has_gsc,
+                                "has_dual_period": has_dual_haloscan
+                            }
+                            
+                            # Prompt système
+                            system_prompt = """Tu es un expert SEO senior spécialisé dans l'analyse de données et la stratégie de contenu.
+
+Tu reçois des données SEO complètes d'un site et tu dois produire :
+
+1. **ANALYSE STRATÉGIQUE** (5-10 lignes max)
+- Diagnostic clair et direct de la situation
+- Identification des patterns (saisonnalité, problème technique, cannibalisation...)
+- Points d'alerte majeurs
+
+2. **TODO POUR L'ÉQUIPE CONTENT** 
+Une liste d'actions CONCRÈTES et PRIORISÉES. Chaque action doit être :
+- Précise (pas de "améliorer le contenu" mais "ajouter une section FAQ avec les questions X, Y, Z")
+- Assignable (une personne peut la prendre et la faire)
+- Avec l'URL exacte concernée
+- Avec l'impact attendu (estimation)
+
+Format de la TODO :
+```
+## 🔴 PRIORITÉ HAUTE (à faire cette semaine)
+- [ ] **[Action précise]** - URL: [url complète] - Impact: [estimation] - Raison: [pourquoi]
+
+## 🟠 PRIORITÉ MOYENNE (à faire ce mois)
+- [ ] **[Action précise]** - URL: [url complète] - Impact: [estimation] - Raison: [pourquoi]
+
+## 🟡 PRIORITÉ BASSE (à planifier)
+- [ ] **[Action précise]** - URL: [url complète] - Impact: [estimation] - Raison: [pourquoi]
+```
+
+3. **ALERTES** (si applicable)
+- Risques identifiés
+- Dépendances dangereuses
+- Tendances inquiétantes
+
+Sois direct, pragmatique, et orienté action. Pas de blabla corporate. L'équipe content doit pouvoir prendre cette TODO et l'exécuter immédiatement."""
+
+                            # Appel à Claude
+                            message = client.messages.create(
+                                model="claude-opus-4-5-20251101",
+                                max_tokens=4096,
+                                system=system_prompt,
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": f"""Voici les données SEO à analyser :
+
+```json
+{json.dumps(context_data, ensure_ascii=False, indent=2, default=str)}
+```
+
+Génère ton analyse stratégique et la TODO priorisée pour l'équipe content."""
+                                    }
+                                ]
+                            )
+                            
+                            # Extraire la réponse
+                            ai_analysis = message.content[0].text
+                            
+                            # Stocker dans session_state
+                            st.session_state['ai_analysis'] = ai_analysis
+                            
+                            st.success("✅ Analyse IA générée !")
+                            
+                        except anthropic.AuthenticationError:
+                            st.error("❌ Clé API invalide. Vérifiez votre clé Anthropic.")
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de l'analyse IA : {str(e)}")
+                
+                # Afficher l'analyse IA si disponible
+                if 'ai_analysis' in st.session_state:
+                    st.divider()
+                    st.markdown("## 🤖 Analyse IA et TODO")
+                    st.markdown(st.session_state['ai_analysis'])
+                    
+                    # Bouton pour télécharger le rapport complet (avec IA)
+                    rapport_complet = st.session_state['report'] + "\n\n---\n\n# 🤖 ANALYSE IA ET TODO\n\n" + st.session_state['ai_analysis']
+                    st.download_button(
+                        "📥 Télécharger le rapport COMPLET avec IA (Markdown)",
+                        rapport_complet,
+                        "rapport_seo_complet_avec_ia.md",
+                        "text/markdown"
+                    )
+            else:
+                st.info("👆 Entrez votre clé API Anthropic dans la sidebar pour activer l'analyse IA")
             
             st.divider()
             
