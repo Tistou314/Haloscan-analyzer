@@ -229,8 +229,22 @@ if uploaded_leads:
     periode_avant_label = '+'.join(periode_avant) if periode_avant else 'N/A'
     periode_apres_label = '+'.join(periode_apres) if periode_apres else 'N/A'
     
-    # Calculer les totaux (seulement si on a des colonnes valides)
-    if month_cols:
+    # Calculer les totaux sur TOUS les mois entre le début de période AVANT et la fin de période APRÈS
+    if periode_avant and periode_apres:
+        # Trouver le mois min (début période) et max (fin période)
+        all_selected = periode_avant + periode_apres
+        mois_min = min(all_selected)
+        mois_max = max(all_selected)
+        
+        # Filtrer les colonnes de mois qui sont dans cette plage
+        periode_complete = [m for m in month_cols_sorted if mois_min <= m <= mois_max]
+        
+        if periode_complete:
+            leads_df['leads_total'] = leads_df[periode_complete].sum(axis=1)
+            st.sidebar.caption(f"📊 Leads total : {mois_min} → {mois_max} ({len(periode_complete)} mois)")
+        else:
+            leads_df['leads_total'] = 0
+    elif month_cols:
         leads_df['leads_total'] = leads_df[month_cols].sum(axis=1)
     else:
         leads_df['leads_total'] = 0
