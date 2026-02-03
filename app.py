@@ -97,9 +97,6 @@ with st.sidebar:
     
     uploaded_leads = st.file_uploader("2️⃣ Excel Leads par URL (optionnel)", type=['xlsx', 'xls'], 
                                        help="Fichier avec colonnes: url, puis une colonne par mois (YYYY_MM)")
-    
-    uploaded_seobserver = st.file_uploader("3️⃣ TSV SEObserver (cannibalisation)", type=['tsv', 'csv'],
-                                            help="Export SEObserver avec colonnes: Keyword, Url, Position")
 
 # Variables globales pour les leads
 leads_df = None
@@ -107,41 +104,6 @@ has_leads = False
 month_cols = []
 periode_avant = []
 periode_apres = []
-
-# Variables globales pour SEObserver
-seobserver_df = None
-has_seobserver = False
-
-# Charger SEObserver si uploadé
-if uploaded_seobserver:
-    try:
-        # Essayer utf-16 d'abord (format SEObserver standard)
-        try:
-            seobserver_df = pd.read_csv(uploaded_seobserver, encoding='utf-16', sep='\t')
-        except:
-            uploaded_seobserver.seek(0)
-            seobserver_df = pd.read_csv(uploaded_seobserver, encoding='utf-8', sep='\t')
-        
-        # Normaliser les noms de colonnes
-        seobserver_df.columns = seobserver_df.columns.str.strip()
-        
-        # Vérifier qu'on a les colonnes nécessaires
-        if 'Keyword' in seobserver_df.columns and 'Url' in seobserver_df.columns:
-            has_seobserver = True
-            
-            # Normaliser les URLs pour le matching
-            seobserver_df['url_normalized'] = seobserver_df['Url'].apply(normalize_url)
-            
-            # Détecter les KW avec plusieurs URLs (cannibalisation)
-            kw_counts = seobserver_df.groupby('Keyword')['Url'].nunique()
-            kw_cannibalized = kw_counts[kw_counts > 1].index.tolist()
-            
-            st.sidebar.success(f"✅ SEObserver : {len(seobserver_df):,} lignes, {seobserver_df['Keyword'].nunique():,} KW")
-            st.sidebar.info(f"🔄 {len(kw_cannibalized)} KW avec cannibalisation détectée")
-        else:
-            st.sidebar.error("❌ Colonnes 'Keyword' et 'Url' non trouvées dans le fichier SEObserver")
-    except Exception as e:
-        st.sidebar.error(f"❌ Erreur lecture SEObserver: {e}")
 
 if uploaded_leads:
     # Lire la feuille "Leads totaux par urls" (pas la première feuille qui contient les visites)
@@ -673,250 +635,112 @@ if uploaded_file:
     # TAB 5: CANNIBALISATION
     with tab5:
         st.header("🔄 Détection de cannibalisation interne")
+        st.info("**Objectif** : Identifier les KW où une URL perd des positions tandis qu'une autre URL du site en gagne. Avant de réoptimiser une page en perte, vérifiez qu'une autre page n'a pas pris le relais !")
         
-        # Deux sources de données possibles
-        tab_haloscan, tab_seobserver, tab_combine = st.tabs(["📊 Haloscan (mouvements)", "🔍 SEObserver (statique)", "🔴 Combiné (priorité)"])
-        
-        # === ONGLET HALOSCAN ===
-        with tab_haloscan:
-            st.info("**Source Haloscan** : KW où une URL perd des positions tandis qu'une autre en gagne.")
-            
-            if 'mot_cle' in df.columns and 'url' in df.columns:
-                with st.spinner("Analyse des cannibalisations en cours..."):
-                    # Travailler sur le df complet (pas filtré) pour détecter toutes les cannibalisations
-                    df_canni = df[['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume']].copy()
-                    
-                    # Pour chaque KW, trouver les URLs en perte et en gain
-                    df_pertes_canni = df_canni[df_canni['diff_pos'] < 0].copy()
-                    df_gains_canni = df_canni[df_canni['diff_pos'] > 0].copy()
-                    
-                    # Trouver les KW qui ont à la fois des pertes ET des gains (= cannibalisation potentielle)
-                    kw_en_perte = set(df_pertes_canni['mot_cle'].unique())
-                    kw_en_gain = set(df_gains_canni['mot_cle'].unique())
-                    kw_cannibalisation = kw_en_perte & kw_en_gain
-                    
-                    st.metric("🔄 KW avec cannibalisation potentielle", f"{len(kw_cannibalisation):,}")
-                    
-                    if len(kw_cannibalisation) > 0:
-                        # Construire le tableau de cannibalisation
-                        resultats_canni = []
-                        
-                        for kw in kw_cannibalisation:
-                            # URLs en perte sur ce KW
-                            urls_perte = df_pertes_canni[df_pertes_canni['mot_cle'] == kw].sort_values('diff_pos', ascending=True)
-                            # URLs en gain sur ce KW
-                            urls_gain = df_gains_canni[df_gains_canni['mot_cle'] == kw].sort_values('diff_pos', ascending=False)
-                            
-                            # Prendre la pire perte et le meilleur gain
-                            if len(urls_perte) > 0 and len(urls_gain) > 0:
-                                perte = urls_perte.iloc[0]
-                                gain = urls_gain.iloc[0]
-                                
-                                # Volume du KW (prendre le max disponible)
-                                vol = max(perte.get('volume', 0) or 0, gain.get('volume', 0) or 0)
-                                
-                                resultats_canni.append({
-                                    'mot_cle': kw,
-                                    'volume': vol,
-                                    'url_perte': perte['url'],
-                                    'ancienne_pos_perte': perte.get('ancienne_pos', 0),
-                                    'nouvelle_pos_perte': perte.get('derniere_pos', 0),
-                                    'diff_perte': perte.get('diff_pos', 0),
-                                    'url_gain': gain['url'],
-                                    'ancienne_pos_gain': gain.get('ancienne_pos', 0),
-                                    'nouvelle_pos_gain': gain.get('derniere_pos', 0),
-                                    'diff_gain': gain.get('diff_pos', 0),
-                                })
-                        
-                        if resultats_canni:
-                            df_resultats = pd.DataFrame(resultats_canni)
-                            
-                            # Trier par volume décroissant (les KW les plus importants d'abord)
-                            df_resultats = df_resultats.sort_values('volume', ascending=False)
-                            
-                            # Filtres
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                vol_min_canni = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_canni_haloscan")
-                            with col2:
-                                diff_min_canni = st.number_input("Perte minimum (positions)", min_value=1, value=5, step=1, key="diff_canni_haloscan")
-                            
-                            # Appliquer filtres
-                            df_resultats_f = df_resultats[
-                                (df_resultats['volume'] >= vol_min_canni) & 
-                                (df_resultats['diff_perte'].abs() >= diff_min_canni)
-                            ]
-                            
-                            st.success(f"**{len(df_resultats_f):,}** cas de cannibalisation détectés (sur {len(df_resultats):,} total)")
-                            
-                            # Affichage du tableau
-                            st.subheader("⚠️ KW à risque — Vérifier avant réoptimisation")
-                            
-                            # Formater pour l'affichage
-                            df_display = df_resultats_f.copy()
-                            df_display['📉 URL en perte'] = df_display['url_perte']
-                            df_display['Était pos'] = df_display['ancienne_pos_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            df_display['→ Maintenant'] = df_display['nouvelle_pos_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            df_display['Diff'] = df_display['diff_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            df_display['📈 URL en hausse'] = df_display['url_gain']
-                            df_display['Était pos '] = df_display['ancienne_pos_gain'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            df_display['→ Maintenant '] = df_display['nouvelle_pos_gain'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            df_display['Diff '] = df_display['diff_gain'].apply(lambda x: f"+{int(x)}" if pd.notna(x) else "+0")
-                            df_display['Volume'] = df_display['volume'].apply(lambda x: int(x) if pd.notna(x) else 0)
-                            
-                            cols_display = ['mot_cle', 'Volume', '📉 URL en perte', 'Était pos', '→ Maintenant', 'Diff', '📈 URL en hausse', 'Était pos ', '→ Maintenant ', 'Diff ']
-                            
-                            st.dataframe(df_display[cols_display].head(100), use_container_width=True, height=500)
-                            
-                            # Export
-                            csv_canni = df_resultats_f.to_csv(index=False, sep=';').encode('utf-8')
-                            st.download_button("📥 Exporter (CSV)", csv_canni, "cannibalisations_haloscan.csv", key="export_haloscan")
-                            
-                    else:
-                        st.success("✅ Aucune cannibalisation détectée dans Haloscan !")
-            else:
-                st.warning("Colonnes 'mot_cle' et 'url' nécessaires pour l'analyse")
-        
-        # === ONGLET SEOBSERVER ===
-        with tab_seobserver:
-            st.info("**Source SEObserver** : KW où plusieurs URLs du site rankent en même temps (cannibalisation statique).")
-            
-            if has_seobserver and seobserver_df is not None:
-                # Trouver les KW avec plusieurs URLs
-                kw_url_counts = seobserver_df.groupby('Keyword').agg({
-                    'Url': 'nunique',
-                    'Position': 'min'
-                }).reset_index()
-                kw_url_counts.columns = ['Keyword', 'nb_urls', 'best_position']
-                
-                # Ajouter le volume si disponible (chercher la bonne colonne)
-                if 'Search Volume' in seobserver_df.columns:
-                    vol_by_kw = seobserver_df.groupby('Keyword')['Search Volume'].first().reset_index()
-                    vol_by_kw.columns = ['Keyword', 'volume']
-                    kw_url_counts = kw_url_counts.merge(vol_by_kw, on='Keyword', how='left')
-                else:
-                    kw_url_counts['volume'] = 0
-                
-                # Filtrer les KW cannibalisés (plus d'une URL)
-                kw_cannibalized = kw_url_counts[kw_url_counts['nb_urls'] > 1].sort_values('nb_urls', ascending=False)
-                
-                st.metric("🔄 KW avec plusieurs URLs", f"{len(kw_cannibalized):,}")
-                
-                if len(kw_cannibalized) > 0:
-                    st.success(f"**{len(kw_cannibalized):,}** KW cannibalisés détectés")
-                    
-                    # Pour chaque KW cannibalisé, afficher les URLs
-                    resultats_seo = []
-                    for _, row in kw_cannibalized.head(200).iterrows():
-                        kw = row['Keyword']
-                        urls_kw = seobserver_df[seobserver_df['Keyword'] == kw].sort_values('Position')
-                        
-                        for i, url_row in urls_kw.iterrows():
-                            resultats_seo.append({
-                                'Keyword': kw,
-                                'URL': url_row['Url'],
-                                'Position': int(url_row['Position']) if pd.notna(url_row['Position']) else 0,
-                                'Nb URLs sur ce KW': int(row['nb_urls'])
-                            })
-                    
-                    df_seo_display = pd.DataFrame(resultats_seo)
-                    st.dataframe(df_seo_display, use_container_width=True, height=500)
-                    
-                    # Export
-                    csv_seo = df_seo_display.to_csv(index=False, sep=';').encode('utf-8')
-                    st.download_button("📥 Exporter (CSV)", csv_seo, "cannibalisations_seobserver.csv", key="export_seobserver")
-                else:
-                    st.success("✅ Aucune cannibalisation détectée dans SEObserver !")
-            else:
-                st.warning("👆 Uploadez un fichier SEObserver (TSV) pour voir les cannibalisations statiques")
-        
-        # === ONGLET COMBINÉ ===
-        with tab_combine:
-            st.info("**🔴 PRIORITÉ MAXIMALE** : KW présents dans les DEUX sources = cannibalisation confirmée + mouvement récent")
-            
-            if has_seobserver and seobserver_df is not None and 'mot_cle' in df.columns:
-                # KW cannibalisés dans SEObserver
-                kw_url_counts = seobserver_df.groupby('Keyword')['Url'].nunique()
-                kw_seo_cannibalized = set(kw_url_counts[kw_url_counts > 1].index)
-                
-                # KW avec mouvement dans Haloscan
+        if 'mot_cle' in df.columns and 'url' in df.columns:
+            with st.spinner("Analyse des cannibalisations en cours..."):
+                # Travailler sur le df complet (pas filtré) pour détecter toutes les cannibalisations
                 df_canni = df[['mot_cle', 'url', 'ancienne_pos', 'derniere_pos', 'diff_pos', 'volume']].copy()
-                df_pertes_canni = df_canni[df_canni['diff_pos'] < 0]
-                df_gains_canni = df_canni[df_canni['diff_pos'] > 0]
-                kw_haloscan_perte = set(df_pertes_canni['mot_cle'].unique())
-                kw_haloscan_gain = set(df_gains_canni['mot_cle'].unique())
-                kw_haloscan_mouvement = kw_haloscan_perte | kw_haloscan_gain
                 
-                # Intersection : KW cannibalisés ET en mouvement
-                kw_priorite = kw_seo_cannibalized & kw_haloscan_mouvement
+                # Pour chaque KW, trouver les URLs en perte et en gain
+                df_pertes_canni = df_canni[df_canni['diff_pos'] < 0].copy()
+                df_gains_canni = df_canni[df_canni['diff_pos'] > 0].copy()
                 
-                # Encore mieux : KW où une URL perd dans Haloscan ET plusieurs URLs dans SEObserver
-                kw_super_priorite = kw_seo_cannibalized & kw_haloscan_perte
+                # Trouver les KW qui ont à la fois des pertes ET des gains (= cannibalisation potentielle)
+                kw_en_perte = set(df_pertes_canni['mot_cle'].unique())
+                kw_en_gain = set(df_gains_canni['mot_cle'].unique())
+                kw_cannibalisation = kw_en_perte & kw_en_gain
                 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("SEObserver : KW cannibalisés", f"{len(kw_seo_cannibalized):,}")
-                col2.metric("Haloscan : KW en mouvement", f"{len(kw_haloscan_mouvement):,}")
-                col3.metric("🔴 INTERSECTION (priorité)", f"{len(kw_super_priorite):,}")
+                st.metric("🔄 KW avec cannibalisation potentielle", f"{len(kw_cannibalisation):,}")
                 
-                if len(kw_super_priorite) > 0:
-                    st.subheader("🔴 KW PRIORITAIRES — Cannibalisation + Perte de position")
+                if len(kw_cannibalisation) > 0:
+                    # Construire le tableau de cannibalisation
+                    resultats_canni = []
                     
-                    # Construire tableau détaillé
-                    resultats_combine = []
-                    for kw in kw_super_priorite:
-                        # Données SEObserver
-                        urls_seo = seobserver_df[seobserver_df['Keyword'] == kw].sort_values('Position')
-                        nb_urls_seo = len(urls_seo)
-                        urls_list_seo = urls_seo['Url'].tolist()[:3]
+                    for kw in kw_cannibalisation:
+                        # URLs en perte sur ce KW
+                        urls_perte = df_pertes_canni[df_pertes_canni['mot_cle'] == kw].sort_values('diff_pos', ascending=True)
+                        # URLs en gain sur ce KW
+                        urls_gain = df_gains_canni[df_gains_canni['mot_cle'] == kw].sort_values('diff_pos', ascending=False)
                         
-                        # Données Haloscan (récupérer le volume depuis Haloscan)
-                        haloscan_kw = df_canni[df_canni['mot_cle'] == kw]
-                        url_perte = haloscan_kw[haloscan_kw['diff_pos'] < 0].sort_values('diff_pos').head(1)
-                        vol = haloscan_kw['volume'].max() if 'volume' in haloscan_kw.columns else 0
-                        vol = vol if pd.notna(vol) else 0
-                        
-                        if len(url_perte) > 0:
-                            resultats_combine.append({
-                                'Keyword': kw,
-                                'Volume': int(vol),
-                                'Nb URLs (SEObserver)': nb_urls_seo,
-                                'URL en perte (Haloscan)': url_perte['url'].iloc[0],
-                                'Ancienne pos': int(url_perte['ancienne_pos'].iloc[0]) if pd.notna(url_perte['ancienne_pos'].iloc[0]) else 0,
-                                'Nouvelle pos': int(url_perte['derniere_pos'].iloc[0]) if pd.notna(url_perte['derniere_pos'].iloc[0]) else 0,
-                                'Diff': int(url_perte['diff_pos'].iloc[0]) if pd.notna(url_perte['diff_pos'].iloc[0]) else 0,
-                                'Autres URLs (SEObserver)': ' | '.join(urls_list_seo[:2])
+                        # Prendre la pire perte et le meilleur gain
+                        if len(urls_perte) > 0 and len(urls_gain) > 0:
+                            perte = urls_perte.iloc[0]
+                            gain = urls_gain.iloc[0]
+                            
+                            # Volume du KW (prendre le max disponible)
+                            vol = max(perte.get('volume', 0) or 0, gain.get('volume', 0) or 0)
+                            
+                            resultats_canni.append({
+                                'mot_cle': kw,
+                                'volume': vol,
+                                'url_perte': perte['url'],
+                                'ancienne_pos_perte': perte.get('ancienne_pos', 0),
+                                'nouvelle_pos_perte': perte.get('derniere_pos', 0),
+                                'diff_perte': perte.get('diff_pos', 0),
+                                'url_gain': gain['url'],
+                                'ancienne_pos_gain': gain.get('ancienne_pos', 0),
+                                'nouvelle_pos_gain': gain.get('derniere_pos', 0),
+                                'diff_gain': gain.get('diff_pos', 0),
                             })
                     
-                    if resultats_combine:
-                        df_combine = pd.DataFrame(resultats_combine)
-                        df_combine = df_combine.sort_values('Volume', ascending=False)
+                    if resultats_canni:
+                        df_resultats = pd.DataFrame(resultats_canni)
                         
-                        # Filtre volume (depuis Haloscan)
-                        vol_min_combine = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_combine")
-                        df_combine_f = df_combine[df_combine['Volume'] >= vol_min_combine]
+                        # Trier par volume décroissant (les KW les plus importants d'abord)
+                        df_resultats = df_resultats.sort_values('volume', ascending=False)
                         
-                        st.success(f"**{len(df_combine_f):,}** KW prioritaires détectés")
+                        # Filtres
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            vol_min_canni = st.number_input("Volume minimum", min_value=0, value=100, step=50, key="vol_canni")
+                        with col2:
+                            diff_min_canni = st.number_input("Perte minimum (positions)", min_value=1, value=5, step=1, key="diff_canni")
                         
-                        st.dataframe(df_combine_f, use_container_width=True, height=500)
+                        # Appliquer filtres
+                        df_resultats_f = df_resultats[
+                            (df_resultats['volume'] >= vol_min_canni) & 
+                            (df_resultats['diff_perte'].abs() >= diff_min_canni)
+                        ]
+                        
+                        st.success(f"**{len(df_resultats_f):,}** cas de cannibalisation détectés (sur {len(df_resultats):,} total)")
+                        
+                        # Affichage du tableau
+                        st.subheader("⚠️ KW à risque — Vérifier avant réoptimisation")
+                        
+                        # Formater pour l'affichage
+                        df_display = df_resultats_f.copy()
+                        df_display['📉 URL en perte'] = df_display['url_perte']
+                        df_display['Était pos'] = df_display['ancienne_pos_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        df_display['→ Maintenant'] = df_display['nouvelle_pos_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        df_display['Diff'] = df_display['diff_perte'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        df_display['📈 URL en hausse'] = df_display['url_gain']
+                        df_display['Était pos '] = df_display['ancienne_pos_gain'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        df_display['→ Maintenant '] = df_display['nouvelle_pos_gain'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        df_display['Diff '] = df_display['diff_gain'].apply(lambda x: f"+{int(x)}" if pd.notna(x) else "+0")
+                        df_display['Volume'] = df_display['volume'].apply(lambda x: int(x) if pd.notna(x) else 0)
+                        
+                        cols_display = ['mot_cle', 'Volume', '📉 URL en perte', 'Était pos', '→ Maintenant', 'Diff', '📈 URL en hausse', 'Était pos ', '→ Maintenant ', 'Diff ']
+                        
+                        st.dataframe(df_display[cols_display].head(100), use_container_width=True, height=500)
                         
                         # Alerte
-                        st.error("""
-                        **🚨 ACTION REQUISE sur ces KW :**
-                        1. Plusieurs URLs rankent sur le même KW (SEObserver)
-                        2. ET une URL perd des positions (Haloscan)
-                        3. → Choisir UNE seule URL à pousser, rediriger ou fusionner les autres
+                        st.warning("""
+                        **⚠️ ATTENTION avant de réoptimiser une URL en perte :**
+                        1. Vérifiez si l'URL en hausse répond mieux à l'intention de recherche
+                        2. Si oui → renforcez l'URL en hausse plutôt que l'ancienne
+                        3. Si non → vérifiez le maillage interne pour éviter la cannibalisation
+                        4. Envisagez une redirection 301 si l'ancienne URL n'a plus de raison d'être
                         """)
                         
                         # Export
-                        csv_combine = df_combine_f.to_csv(index=False, sep=';').encode('utf-8')
-                        st.download_button("📥 Exporter PRIORITÉS (CSV)", csv_combine, "cannibalisations_priorite.csv", key="export_combine")
+                        csv_canni = df_resultats_f.to_csv(index=False, sep=';').encode('utf-8')
+                        st.download_button("📥 Exporter les cannibalisations (CSV)", csv_canni, "cannibalisations.csv")
+                        
                 else:
-                    st.success("✅ Aucun KW n'est à la fois cannibalisé ET en perte !")
-            else:
-                if not has_seobserver:
-                    st.warning("👆 Uploadez un fichier SEObserver pour croiser les données")
-                if 'mot_cle' not in df.columns:
-                    st.warning("Colonne 'mot_cle' non trouvée dans Haloscan")
+                    st.success("✅ Aucune cannibalisation détectée ! Chaque KW n'a qu'une seule URL qui bouge.")
+        else:
+            st.warning("Colonnes 'mot_cle' et 'url' nécessaires pour l'analyse de cannibalisation")
     
     # TAB 6: RAPPORT
     with tab6:
