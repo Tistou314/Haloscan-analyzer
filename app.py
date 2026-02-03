@@ -93,9 +93,26 @@ st.title("📊 Haloscan SEO Diff Analyzer")
 with st.sidebar:
     st.header("📁 Import des données")
     
-    uploaded_file = st.file_uploader("1️⃣ CSV Haloscan (positions)", type=['csv'])
+    st.subheader("📊 Fichiers Haloscan")
+    uploaded_file_p1 = st.file_uploader("1️⃣ CSV Haloscan Période 1", type=['csv'], key="haloscan_p1")
+    uploaded_file_p2 = st.file_uploader("2️⃣ CSV Haloscan Période 2", type=['csv'], key="haloscan_p2")
     
-    uploaded_leads = st.file_uploader("2️⃣ Excel Leads par URL (optionnel)", type=['xlsx', 'xls'], 
+    # Labels des périodes (personnalisables)
+    if uploaded_file_p1 and uploaded_file_p2:
+        st.caption("📅 Nommez vos périodes :")
+        col1, col2 = st.columns(2)
+        with col1:
+            label_debut_p1 = st.text_input("Début P1", value="Jan 2025", key="label_debut_p1")
+            label_fin_p1 = st.text_input("Fin P1 / Début P2", value="Sept 2025", key="label_fin_p1")
+        with col2:
+            label_fin_p2 = st.text_input("Fin P2", value="Fév 2026", key="label_fin_p2")
+    else:
+        label_debut_p1 = "Début P1"
+        label_fin_p1 = "Fin P1"
+        label_fin_p2 = "Fin P2"
+    
+    st.subheader("💰 Données business")
+    uploaded_leads = st.file_uploader("3️⃣ Excel Leads par URL (optionnel)", type=['xlsx', 'xls'], 
                                        help="Fichier avec colonnes: url, puis une colonne par mois (YYYY_MM)")
 
 # Variables globales pour les leads
@@ -104,6 +121,11 @@ has_leads = False
 month_cols = []
 periode_avant = []
 periode_apres = []
+
+# Variables pour le mode multi-périodes
+has_dual_haloscan = False
+df_p1 = None
+df_p2 = None
 
 if uploaded_leads:
     # Lire la feuille "Leads totaux par urls" (pas la première feuille qui contient les visites)
@@ -197,8 +219,97 @@ if uploaded_leads:
     if periode_avant and periode_apres:
         st.sidebar.info(f"Comparaison : {periode_avant_label} → {periode_apres_label}")
 
-if uploaded_file:
+# Déterminer le mode de fonctionnement
+uploaded_file = None
+if uploaded_file_p1 and uploaded_file_p2:
+    # Mode double période
+    has_dual_haloscan = True
+    st.sidebar.success("📊 Mode double période activé")
+elif uploaded_file_p1:
+    # Mode simple avec P1
+    uploaded_file = uploaded_file_p1
+elif uploaded_file_p2:
+    # Mode simple avec P2
+    uploaded_file = uploaded_file_p2
+
+# Charger et fusionner les données si mode double période
+if has_dual_haloscan:
+    df_p1 = load_data(uploaded_file_p1)
+    df_p2 = load_data(uploaded_file_p2)
+    
+    # Renommer les colonnes de position pour P1
+    df_p1 = df_p1.rename(columns={
+        'ancienne_pos': 'pos_debut_p1',
+        'derniere_pos': 'pos_fin_p1',
+        'diff_pos': 'diff_p1'
+    })
+    
+    # Renommer les colonnes de position pour P2
+    df_p2 = df_p2.rename(columns={
+        'ancienne_pos': 'pos_debut_p2',
+        'derniere_pos': 'pos_fin_p2',
+        'diff_pos': 'diff_p2'
+    })
+    
+    # Fusionner sur mot_cle + url
+    df = df_p1.merge(
+        df_p2[['mot_cle', 'url', 'pos_debut_p2', 'pos_fin_p2', 'diff_p2']],
+        on=['mot_cle', 'url'],
+        how='outer',
+        suffixes=('', '_p2')
+    )
+    
+    # Calculer les colonnes consolidées
+    # Position de départ = pos_debut_p1 (ou pos_debut_p2 si pas de P1)
+    df['ancienne_pos'] = df['pos_debut_p1'].fillna(df['pos_debut_p2'])
+    # Position finale = pos_fin_p2 (ou pos_fin_p1 si pas de P2)
+    df['derniere_pos'] = df['pos_fin_p2'].fillna(df['pos_fin_p1'])
+    # Diff totale
+    df['diff_pos'] = df['derniere_pos'] - df['ancienne_pos']
+    
+    # Calculer la tendance multi-période
+    def calc_tendance_multi(row):
+        d1 = row.get('diff_p1', 0) or 0
+        d2 = row.get('diff_p2', 0) or 0
+        
+        if pd.isna(d1): d1 = 0
+        if pd.isna(d2): d2 = 0
+        
+        if d1 < -5 and d2 < -5:
+            return "📉📉 Chute continue"
+        elif d1 > 5 and d2 < -5:
+            return "📈📉 Rebond puis rechute"
+        elif d1 < -5 and d2 > 5:
+            return "📉📈 Récupération"
+        elif d1 > 5 and d2 > 5:
+            return "📈📈 Hausse continue"
+        elif abs(d1) <= 5 and abs(d2) <= 5:
+            return "➡️ Stable"
+        elif d1 < 0 or d2 < 0:
+            return "📉 Baisse"
+        else:
+            return "📈 Hausse"
+    
+    df['tendance_multi'] = df.apply(calc_tendance_multi, axis=1)
+    
+    # Recalculer le volume si nécessaire
+    if 'volume' not in df.columns and 'volumeh' in df.columns:
+        df['volume'] = df['volumeh']
+    
+    # Recalculer priority_score
+    if 'volume' in df.columns:
+        df['priority_score'] = df['volume'].fillna(0) * df['diff_pos'].abs().fillna(0)
+    else:
+        df['priority_score'] = df['diff_pos'].abs().fillna(0)
+    
+    st.sidebar.info(f"🔗 {len(df):,} KW fusionnés (P1: {len(df_p1):,} | P2: {len(df_p2):,})")
+
+elif uploaded_file:
     df = load_data(uploaded_file)
+    has_dual_haloscan = False
+
+# Suite du traitement si on a des données
+if (has_dual_haloscan or uploaded_file) and 'df' in dir():
     
     # Croiser avec les données leads si disponibles
     if has_leads and 'url' in df.columns:
@@ -399,8 +510,47 @@ if uploaded_file:
             leads_evol = df_f[df_f['diff_pos'] < 0]['leads_evolution'].fillna(0).sum()
             delta_color = "inverse" if leads_evol < 0 else "normal"
             c4.metric("📊 Évol. leads (période)", f"{int(leads_evol):+,}", delta_color=delta_color)
+        
+        # Section MULTI-PÉRIODES si disponible
+        if has_dual_haloscan and 'tendance_multi' in df_f.columns:
+            st.divider()
+            st.subheader(f"📈 Analyse multi-périodes ({label_debut_p1} → {label_fin_p1} → {label_fin_p2})")
             
-            # Section DOUBLE PEINE
+            # Compter les tendances
+            tendances = df_f['tendance_multi'].value_counts()
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("📉📉 Chute continue", f"{tendances.get('📉📉 Chute continue', 0):,}", help="Perte P1 ET perte P2")
+            col2.metric("📈📉 Rebond puis rechute", f"{tendances.get('📈📉 Rebond puis rechute', 0):,}", help="Gain P1 puis perte P2")
+            col3.metric("📉📈 Récupération", f"{tendances.get('📉📈 Récupération', 0):,}", help="Perte P1 puis gain P2")
+            col4.metric("📈📈 Hausse continue", f"{tendances.get('📈📈 Hausse continue', 0):,}", help="Gain P1 ET gain P2")
+            
+            # Tableau des KW en chute continue (priorité max)
+            df_chute_continue = df_f[df_f['tendance_multi'] == '📉📉 Chute continue'].copy()
+            if len(df_chute_continue) > 0:
+                st.error(f"🚨 **{len(df_chute_continue):,}** mots-clés en CHUTE CONTINUE — Problème structurel à traiter !")
+                
+                # Afficher les colonnes pertinentes
+                cols_multi = ['mot_cle', 'url', 'pos_debut_p1', 'pos_fin_p1', 'diff_p1', 'pos_fin_p2', 'diff_p2', 'diff_pos', 'volume']
+                cols_multi = [c for c in cols_multi if c in df_chute_continue.columns]
+                
+                # Renommer pour clarté avec labels dynamiques
+                df_chute_display = df_chute_continue[cols_multi].head(50).copy()
+                rename_map = {
+                    'pos_debut_p1': f'Pos {label_debut_p1}',
+                    'pos_fin_p1': f'Pos {label_fin_p1}',
+                    'diff_p1': f'Δ P1',
+                    'pos_fin_p2': f'Pos {label_fin_p2}',
+                    'diff_p2': f'Δ P2',
+                    'diff_pos': 'Δ TOTAL',
+                    'volume': 'Volume'
+                }
+                df_chute_display = df_chute_display.rename(columns=rename_map)
+                
+                st.dataframe(df_chute_display.sort_values('Δ TOTAL', ascending=True), use_container_width=True, height=300)
+        
+        # Section DOUBLE PEINE (suite du code existant)
+        if has_leads_merged:
             if 'double_peine' in df_f.columns:
                 df_double_peine = df_f[df_f['double_peine'] == True]
                 if len(df_double_peine) > 0:
