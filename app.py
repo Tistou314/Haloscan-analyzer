@@ -200,11 +200,54 @@ if uploaded_leads:
     
     has_leads = True
     
-    with st.sidebar:
-        st.subheader("📅 Périodes à comparer")
-        st.caption("Sélectionnez les mois correspondant à votre export Haloscan")
+    # Fonction pour convertir un label ("Jan 2025", "Sept 2025") en format YYYY_MM
+    def label_to_month_format(label):
+        """Convertit 'Jan 2025' ou 'Janvier 2025' en '2025_01'"""
+        mois_map = {
+            'jan': '01', 'fev': '02', 'fév': '02', 'mar': '03', 'avr': '04', 'apr': '04',
+            'mai': '05', 'may': '05', 'jun': '06', 'jui': '07', 'jul': '07',
+            'aou': '08', 'aoû': '08', 'aug': '08', 'sep': '09', 'oct': '10', 
+            'nov': '11', 'dec': '12', 'déc': '12'
+        }
+        label_lower = label.lower().strip()
+        year = None
+        month = None
         
-        # Calculer les valeurs par défaut
+        # Extraire l'année (4 chiffres)
+        import re
+        year_match = re.search(r'20\d{2}', label_lower)
+        if year_match:
+            year = year_match.group()
+        
+        # Extraire le mois
+        for mois_key, mois_val in mois_map.items():
+            if mois_key in label_lower:
+                month = mois_val
+                break
+        
+        if year and month:
+            return f"{year}_{month}"
+        return None
+    
+    # Détecter automatiquement les périodes si labels Haloscan sont définis
+    auto_detected = False
+    if uploaded_file_p1 and uploaded_file_p2:
+        debut_p1_month = label_to_month_format(label_debut_p1)
+        fin_p1_month = label_to_month_format(label_fin_p1)
+        fin_p2_month = label_to_month_format(label_fin_p2)
+        
+        if debut_p1_month and fin_p1_month and fin_p2_month:
+            # Période AVANT = du début P1 jusqu'à (fin P1 - 1 mois)
+            # Période APRÈS = de fin P1 jusqu'à fin P2
+            default_avant = [m for m in month_cols_sorted if debut_p1_month <= m < fin_p1_month]
+            default_apres = [m for m in month_cols_sorted if fin_p1_month <= m <= fin_p2_month]
+            
+            if default_avant and default_apres:
+                auto_detected = True
+                st.sidebar.success(f"🎯 Périodes auto-détectées depuis labels Haloscan")
+    
+    # Si pas de détection auto, utiliser les valeurs par défaut
+    if not auto_detected:
         default_avant = [c for c in month_cols_sorted if c.startswith('2025_09')]
         if not default_avant:
             default_avant = month_cols_sorted[-6:-3] if len(month_cols_sorted) >= 6 else month_cols_sorted[:3]
@@ -212,9 +255,16 @@ if uploaded_leads:
         default_apres = [c for c in month_cols_sorted if c.startswith('2025_11') or c.startswith('2026')]
         if not default_apres:
             default_apres = month_cols_sorted[-3:] if len(month_cols_sorted) >= 3 else month_cols_sorted[-1:]
+    
+    with st.sidebar:
+        st.subheader("📅 Périodes leads à comparer")
+        if auto_detected:
+            st.caption(f"Basé sur vos labels : {label_debut_p1} → {label_fin_p1} → {label_fin_p2}")
+        else:
+            st.caption("Sélectionnez les mois correspondant à votre export Haloscan")
         
         # Période AVANT (ancienne position)
-        st.markdown("**Période AVANT** (ex: sept 2025)")
+        st.markdown("**Période AVANT** (début analyse)")
         periode_avant = st.multiselect(
             "Mois période avant",
             options=month_cols_sorted,
@@ -223,7 +273,7 @@ if uploaded_leads:
         )
         
         # Période APRÈS (position actuelle)
-        st.markdown("**Période APRÈS** (ex: fév 2026)")
+        st.markdown("**Période APRÈS** (fin analyse)")
         periode_apres = st.multiselect(
             "Mois période après", 
             options=month_cols_sorted,
