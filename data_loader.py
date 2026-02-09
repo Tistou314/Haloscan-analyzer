@@ -91,11 +91,33 @@ def load_data(uploaded_file):
         .str.replace('è', 'e', regex=False)
     )
     
-    # Mapping vers noms standards
-    mapping = {
-        'mot-cle_(mc)': 'mot_cle',
-        'plus_vieille_pos': 'ancienne_pos',
-    }
+    # Mapping vers noms standards — couvre toutes les variantes Haloscan connues
+    mapping = {}
+    # Chercher la colonne mot-clé
+    for c in df.columns:
+        cl = c.lower().replace('-', '_').replace(' ', '_')
+        if 'mot_cle' in cl or 'mot_clé' in cl or 'keyword' in cl or 'mc' == cl:
+            mapping[c] = 'mot_cle'
+        elif 'plus_vieille' in cl or 'ancienne' in cl or 'old_pos' in cl or 'previous' in cl:
+            mapping[c] = 'ancienne_pos'
+        elif 'derniere' in cl or 'dernière' in cl or 'new_pos' in cl or 'current' in cl or 'last_pos' in cl:
+            mapping[c] = 'derniere_pos'
+        elif 'diff' in cl and 'pos' in cl:
+            mapping[c] = 'diff_pos'
+        elif 'meilleure' in cl or 'best' in cl:
+            mapping[c] = 'meilleure_pos'
+        elif cl == 'url' or cl == 'page':
+            mapping[c] = 'url'
+        elif 'volumeh' in cl:
+            mapping[c] = 'volumeh'
+        elif cl == 'volume' or cl == 'vol':
+            mapping[c] = 'volume'
+        elif cl == 'trafic' or cl == 'traffic':
+            mapping[c] = 'trafic'
+        elif cl == 'cpc':
+            mapping[c] = 'cpc'
+        elif cl == 'statut' or cl == 'status':
+            mapping[c] = 'statut'
     df = df.rename(columns=mapping)
     
     # Créer colonne 'volume' à partir de 'volumeh' si absente
