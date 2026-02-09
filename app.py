@@ -132,11 +132,40 @@ elif uploaded_file_p2: uploaded_file = uploaded_file_p2
 
 if has_dual_haloscan:
     df_p1 = load_data(uploaded_file_p1); df_p2 = load_data(uploaded_file_p2)
-    df_p1 = df_p1.rename(columns={'ancienne_pos':'pos_debut_p1','derniere_pos':'pos_fin_p1','diff_pos':'diff_p1'})
-    df_p2 = df_p2.rename(columns={'ancienne_pos':'pos_debut_p2','derniere_pos':'pos_fin_p2','diff_pos':'diff_p2'})
-    df = df_p1.merge(df_p2[['mot_cle','url','pos_debut_p2','pos_fin_p2','diff_p2']], on=['mot_cle','url'], how='outer', suffixes=('','_p2'))
-    df['ancienne_pos'] = df['pos_debut_p1'].fillna(df['pos_debut_p2'])
-    df['derniere_pos'] = df['pos_fin_p2'].fillna(df['pos_fin_p1'])
+    # Debug colonnes pour diagnostic
+    with st.sidebar.expander("🔍 Debug colonnes CSV", expanded=False):
+        st.write("P1:", list(df_p1.columns))
+        st.write("P2:", list(df_p2.columns))
+    # Rename robuste : ne renommer que ce qui existe
+    rename_p1 = {k: v for k, v in {'ancienne_pos':'pos_debut_p1','derniere_pos':'pos_fin_p1','diff_pos':'diff_p1'}.items() if k in df_p1.columns}
+    rename_p2 = {k: v for k, v in {'ancienne_pos':'pos_debut_p2','derniere_pos':'pos_fin_p2','diff_pos':'diff_p2'}.items() if k in df_p2.columns}
+    df_p1 = df_p1.rename(columns=rename_p1)
+    df_p2 = df_p2.rename(columns=rename_p2)
+    # Sélectionner les colonnes P2 disponibles pour le merge
+    merge_cols_p2 = ['mot_cle', 'url'] + [c for c in ['pos_debut_p2','pos_fin_p2','diff_p2'] if c in df_p2.columns]
+    # Fallback : si les colonnes renommées n'existent pas, utiliser les originales avec suffixe
+    if 'pos_debut_p2' not in df_p2.columns and 'pos_fin_p2' not in df_p2.columns:
+        # Le rename n'a pas fonctionné — les colonnes ont des noms différents
+        # On merge tout et on identifie après
+        common_cols = [c for c in df_p2.columns if c in ['mot_cle', 'url']]
+        if common_cols:
+            df = df_p1.merge(df_p2, on=common_cols, how='outer', suffixes=('_p1', '_p2'))
+        else:
+            st.error("❌ Impossible de fusionner : colonnes 'mot_cle' et/ou 'url' absentes")
+            st.stop()
+        # Chercher les colonnes de position dans le merge résultant
+        for prefix, suffix in [('pos_debut', '_p2'), ('pos_fin', '_p2'), ('diff', '_p2')]:
+            target = f"{prefix}{suffix}"
+            if target not in df.columns:
+                # Chercher des alternatives
+                candidates = [c for c in df.columns if 'pos' in c.lower() and suffix in c]
+                if candidates:
+                    df = df.rename(columns={candidates[0]: target})
+    else:
+        merge_cols_p2 = [c for c in merge_cols_p2 if c in df_p2.columns]
+        df = df_p1.merge(df_p2[merge_cols_p2], on=['mot_cle','url'], how='outer', suffixes=('','_p2'))
+    df['ancienne_pos'] = df.get('pos_debut_p1', df.get('ancienne_pos', pd.Series(0, index=df.index))).fillna(df.get('pos_debut_p2', pd.Series(0, index=df.index)))
+    df['derniere_pos'] = df.get('pos_fin_p2', df.get('derniere_pos', pd.Series(0, index=df.index))).fillna(df.get('pos_fin_p1', pd.Series(0, index=df.index)))
     df['diff_pos'] = df['ancienne_pos'] - df['derniere_pos']
     def ctm(row):
         d1 = 0 if pd.isna(row.get('diff_p1',0)) else (row.get('diff_p1',0) or 0)
